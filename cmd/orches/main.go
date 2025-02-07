@@ -301,12 +301,14 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 
 	restartNeeded := false
 
+	toRestart := modified
+	toStop := removed
 	if slices.ContainsFunc(modified, isOrches) {
-		modified = slices.DeleteFunc(modified, isOrches)
+		toRestart = slices.DeleteFunc(modified, isOrches)
 		fmt.Println("Orches.container was changed")
 		restartNeeded = true
 	} else if slices.ContainsFunc(removed, isOrches) {
-		removed = slices.DeleteFunc(removed, isOrches)
+		toStop = slices.DeleteFunc(removed, isOrches)
 		fmt.Println("orches.container was removed")
 		restartNeeded = true
 	}
@@ -315,7 +317,7 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 		return nil, fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	if err := s.StopUnits(removed); err != nil {
+	if err := s.StopUnits(toStop); err != nil {
 		return nil, fmt.Errorf("failed to stop unit: %w", err)
 	}
 
@@ -331,11 +333,11 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 		return nil, fmt.Errorf("failed to reload daemon: %w", err)
 	}
 
-	if err := s.RestartUnits(modified); err != nil {
+	if err := s.RestartUnits(toRestart); err != nil {
 		return nil, fmt.Errorf("failed to restart unit: %w", err)
 	}
 
-	if err := s.StartUnits(append(added, modified...)); err != nil {
+	if err := s.StartUnits(append(added, toRestart...)); err != nil {
 		return nil, fmt.Errorf("failed to start unit: %w", err)
 	}
 
