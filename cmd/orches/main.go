@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"syscall"
@@ -150,7 +151,39 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(initCmd, syncCmd, pruneCmd, runCmd, switchCmd)
+	var versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
+		Run: func(cmd *cobra.Command, args []string) {
+			info, ok := debug.ReadBuildInfo()
+			if !ok {
+				fmt.Println("No build info available")
+				os.Exit(1)
+			}
+
+			buildinfo := struct {
+				ref  string
+				time string
+			}{
+				ref:  "unknown",
+				time: "unknown",
+			}
+
+			for _, val := range info.Settings {
+				switch val.Key {
+				case "vcs.revision":
+					buildinfo.ref = val.Value
+				case "vcs.time":
+					buildinfo.time = val.Value
+				}
+			}
+
+			fmt.Printf("gitref: %s\n", buildinfo.ref)
+			fmt.Printf("buildtime: %s\n", buildinfo.time)
+		},
+	}
+
+	rootCmd.AddCommand(initCmd, syncCmd, pruneCmd, runCmd, switchCmd, versionCmd)
 	rootCmd.Execute()
 }
 

@@ -81,13 +81,17 @@ func addFile(t *testing.T, path, content string) {
 	}
 }
 
-func TestHelp(t *testing.T) {
+func TestAux(t *testing.T) {
 	output := runOrches(t, "help")
 
 	assert.Contains(t, string(output), "orches")
 	assert.Contains(t, string(output), "Usage:")
 	assert.Contains(t, string(output), "sync")
 	assert.Contains(t, string(output), "switch")
+
+	output = runOrches(t, "version")
+	assert.Contains(t, string(output), "gitref")
+	assert.Contains(t, string(output), "buildtime")
 }
 
 func TestSmokePodman(t *testing.T) {
