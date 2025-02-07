@@ -20,23 +20,27 @@ func TestMain(m *testing.M) {
 
 	tmpDir, err := os.MkdirTemp("", "orches-test-")
 	if err != nil {
-		panic(fmt.Sprintf("failed to create orches temp dir: %v", err))
+		fmt.Printf("failed to create orches temp dir: %v", err)
+		panic(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	err = utils.ExecNoOutput("go", "build", "-o", tmpDir+"/orches", "../../cmd/orches")
 	if err != nil {
-		panic(fmt.Sprintf("failed to build orches: %v", err))
+		fmt.Printf("failed to build orches: %v", err)
+		panic(err)
 	}
 
 	err = utils.ExecNoOutput("podman", "build", "-t", "orches-testbase", "./container")
 	if err != nil {
-		panic(fmt.Sprintf("failed to build orches-testbase: %v", err))
+		fmt.Printf("failed to build orches-testbase: %v", err)
+		panic(err)
 	}
 
 	c, err := utils.ExecOutput("podman", "run", "--quiet", "--rm", "-d", "-v", tmpDir+":/app:Z", "--privileged", "orches-testbase")
 	if err != nil {
-		panic(fmt.Sprintf("failed to run orches-testbase: %v", err))
+		fmt.Printf("failed to run orches-testbase: %v", err)
+		panic(err)
 	}
 	cid = strings.TrimSpace(string(c))
 
