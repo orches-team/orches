@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +22,9 @@ import (
 var baseDir string
 
 func init() {
-	if isUser() {
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		baseDir = "/var/lib/orches"
+	} else if isUser() {
 		dir, err := os.UserHomeDir()
 		if err != nil {
 			panic(fmt.Sprintf("failed to get user home directory: %v", err))
@@ -143,33 +146,89 @@ func main() {
 	rootCmd.Execute()
 }
 
-func initRepo(remote string, flags rootFlags) error {
-	repoPath := filepath.Join(baseDir, "repo")
+func lock(fn func() error) error {
+	os.Mkdir(baseDir, 0755)
 
-	if _, err := os.Stat(baseDir); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("repository already exists at %s", repoPath)
-	}
+	slog.Debug("Adding interrupt signal handler in lock()")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	finished := make(chan struct{})
 
-	if _, err := git.Clone(remote, repoPath); err != nil {
-		return fmt.Errorf("failed to clone repo: %w", err)
-	}
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-	blank, err := os.MkdirTemp("", "orches-initial-sync-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(blank)
+	defer func() {
+		signal.Stop(sig)
+		close(finished)
+		wg.Wait()
+	}()
 
-	if err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
-
-	if flags.dryRun {
-		if err := os.RemoveAll(baseDir); err != nil {
-			return fmt.Errorf("failed to remove directory: %w", err)
+	go func() {
+		for {
+			select {
+			case <-sig:
+				fmt.Println("Received signal while running, ignoring.")
+			case <-finished:
+				slog.Debug("Closing signal goroutine in lock()")
+				wg.Done()
+				return
+			}
 		}
+	}()
+
+	var f *os.File
+	var err error
+	for {
+		f, err = os.OpenFile(path.Join(baseDir, "lock"), os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			break
+		}
+		slog.Debug("Failed to acquire lock, retrying", "error", err)
+		time.Sleep(100 * time.Millisecond)
 	}
-	return nil
+	slog.Debug("Acquired lock")
+
+	defer f.Close()
+	defer func() {
+		err := os.Remove(f.Name())
+		if err != nil {
+			slog.Error("Failed to remove lock file", "error", err)
+		}
+		slog.Debug("Removed lock")
+	}()
+
+	return fn()
+}
+
+func initRepo(remote string, flags rootFlags) error {
+	return lock(func() error {
+		repoPath := filepath.Join(baseDir, "repo")
+
+		if _, err := os.Stat(repoPath); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("repository already exists at %s", repoPath)
+		}
+
+		if _, err := git.Clone(remote, repoPath); err != nil {
+			return fmt.Errorf("failed to clone repo: %w", err)
+		}
+
+		blank, err := os.MkdirTemp("", "orches-initial-sync-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
+		defer os.RemoveAll(blank)
+
+		if err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
+
+		if flags.dryRun {
+			if err := os.RemoveAll(baseDir); err != nil {
+				return fmt.Errorf("failed to remove directory: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) error {
@@ -245,119 +304,124 @@ func syncDirs(old, new string, dryRun bool) error {
 }
 
 func cmdSync(flags rootFlags) error {
-	// TODO: implement locking
-	repoDir := filepath.Join(baseDir, "repo")
+	return lock(func() error {
+		repoDir := filepath.Join(baseDir, "repo")
 
-	repo := git.Repo{Path: repoDir}
-	oldState, err := repo.NewWorktree("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
-	}
-	defer oldState.Cleanup()
-
-	beforeRef, err := repo.Ref("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get ref: %w", err)
-	}
-
-	remoteURL, err := repo.RemoteURL("origin")
-	if err != nil {
-		return fmt.Errorf("failed to get remote URL: %w", err)
-	}
-
-	fmt.Printf("Pulling from %s\n", remoteURL)
-
-	if err := repo.Pull(); err != nil {
-		return fmt.Errorf("failed to pull repo: %w", err)
-	}
-
-	afterRef, err := repo.Ref("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get ref: %w", err)
-	}
-
-	if beforeRef == afterRef {
-		fmt.Println("No new commits to sync.")
-		return nil
-	}
-
-	newState, err := repo.NewWorktree("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
-	}
-	defer newState.Cleanup()
-
-	fmt.Printf("Syncing %s..%s\n", beforeRef, afterRef)
-
-	if flags.dryRun {
-		if err := repo.Reset(beforeRef); err != nil {
-			return fmt.Errorf("dry run error: failed to reset repo: %w", err)
+		repo := git.Repo{Path: repoDir}
+		oldState, err := repo.NewWorktree("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
 		}
-	}
+		defer oldState.Cleanup()
 
-	if err := syncDirs(oldState.Path, newState.Path, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		beforeRef, err := repo.Ref("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to get ref: %w", err)
+		}
 
-	fmt.Printf("Synced to %s\n", afterRef)
+		remoteURL, err := repo.RemoteURL("origin")
+		if err != nil {
+			return fmt.Errorf("failed to get remote URL: %w", err)
+		}
 
-	return nil
+		fmt.Printf("Pulling from %s\n", remoteURL)
+
+		if err := repo.Pull(); err != nil {
+			return fmt.Errorf("failed to pull repo: %w", err)
+		}
+
+		afterRef, err := repo.Ref("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to get ref: %w", err)
+		}
+
+		if beforeRef == afterRef {
+			fmt.Println("No new commits to sync.")
+			return nil
+		}
+
+		newState, err := repo.NewWorktree("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
+		defer newState.Cleanup()
+
+		fmt.Printf("Syncing %s..%s\n", beforeRef, afterRef)
+
+		if flags.dryRun {
+			if err := repo.Reset(beforeRef); err != nil {
+				return fmt.Errorf("dry run error: failed to reset repo: %w", err)
+			}
+		}
+
+		if err := syncDirs(oldState.Path, newState.Path, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
+
+		fmt.Printf("Synced to %s\n", afterRef)
+
+		return nil
+	})
 }
 
 func cmdPrune(flags rootFlags) error {
-	blank, err := os.MkdirTemp("", "orches-prune-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(blank)
+	return lock(func() error {
+		blank, err := os.MkdirTemp("", "orches-prune-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
+		defer os.RemoveAll(blank)
 
-	repoDir := filepath.Join(baseDir, "repo")
-	if err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		repoDir := filepath.Join(baseDir, "repo")
+		if err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
 
-	if flags.dryRun {
-		fmt.Printf("Remove %s\n", repoDir)
+		if flags.dryRun {
+			fmt.Printf("Remove %s\n", repoDir)
+			return nil
+		}
+
+		if err := os.RemoveAll(repoDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+
 		return nil
-	}
-
-	if err := os.RemoveAll(baseDir); err != nil {
-		return fmt.Errorf("failed to remove directory: %w", err)
-	}
-
-	return nil
+	})
 }
 
 func cmdSwitch(remote string, flags rootFlags) error {
-	repoDir := path.Join(baseDir, "repo")
+	return lock(func() error {
+		repoDir := path.Join(baseDir, "repo")
 
-	newRepo, err := os.MkdirTemp(baseDir, "orches-switch-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
+		newRepo, err := os.MkdirTemp(baseDir, "orches-switch-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
 
-	if _, err := git.Clone(remote, newRepo); err != nil {
-		return fmt.Errorf("failed to clone repo: %w", err)
-	}
-	defer os.RemoveAll(newRepo)
+		if _, err := git.Clone(remote, newRepo); err != nil {
+			return fmt.Errorf("failed to clone repo: %w", err)
+		}
+		defer os.RemoveAll(newRepo)
 
-	if err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		if err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
 
-	if flags.dryRun {
+		if flags.dryRun {
+			return nil
+		}
+
+		if err := os.RemoveAll(repoDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+
+		if err := os.Rename(newRepo, repoDir); err != nil {
+			return fmt.Errorf("failed to rename directory: %w", err)
+		}
+
 		return nil
-	}
-
-	if err := os.RemoveAll(repoDir); err != nil {
-		return fmt.Errorf("failed to remove directory: %w", err)
-	}
-
-	if err := os.Rename(newRepo, repoDir); err != nil {
-		return fmt.Errorf("failed to rename directory: %w", err)
-	}
-
-	return nil
+	})
 }
 
 func listUnits(dir string) (map[string]unit.Unit, error) {

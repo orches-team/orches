@@ -195,7 +195,7 @@ PublishPort=8888:80
 	_, err = runUnchecked("ls", "/etc/containers/systemd/caddy.container")
 	assert.Error(t, err)
 
-	_, err = runUnchecked("ls", "/var/lib/orches")
+	_, err = runUnchecked("ls", "/var/lib/orches/repo")
 	assert.Error(t, err)
 
 }

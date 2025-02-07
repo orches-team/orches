@@ -1,0 +1,33 @@
+name: Build Image
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          podman build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+          podman build -t ghcr.io/${{ github.repository }}:latest .
+
+      - name: Push
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u $ --password-stdin
+          podman push ghcr.io/${{ github.repository }}:${{ github.sha }}
+          podman push ghcr.io/${{ github.repository }}:latest

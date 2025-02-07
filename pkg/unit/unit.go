@@ -18,6 +18,9 @@ func init() {
 }
 
 func ContainerDir(user bool) string {
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return "/etc/containers/systemd"
+	}
 	if user {
 		return path.Join(homeDir, ".config", "containers", "systemd")
 	}

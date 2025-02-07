@@ -1,0 +1,1 @@
+podman run --rm -it  --mount type=bind,source=/run/user/$(id -u)/systemd,destination=/run/user/$(id -u)/systemd,rw=true -v ./.config/orches:/var/lib/orches -v ./.config/containers/systemd:/etc/containers/systemd --userns=keep-id --pid=host --env XDG_RUNTIME_DIR=/run/user/$(id -u) orches init https://github.com/orches-team/orches-config-rootless.git
