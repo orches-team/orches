@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 		panic(fmt.Sprintf("failed to build orches-testbase: %v", err))
 	}
 
-	c, err := utils.ExecOutput("podman", "run", "--quiet", "--rm", "-d", "-v", tmpDir+":/app:Z", "-v", "./testdata:/testdata:ro,Z", "--privileged", "orches-testbase")
+	c, err := utils.ExecOutput("podman", "run", "--quiet", "--rm", "-d", "-v", tmpDir+":/app:Z", "--privileged", "orches-testbase")
 	if err != nil {
 		panic(fmt.Sprintf("failed to run orches-testbase: %v", err))
 	}
