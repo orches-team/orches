@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"slices"
 
 	"github.com/orches-team/orches/pkg/unit"
 	"github.com/orches-team/orches/pkg/utils"
@@ -42,27 +43,15 @@ func (s *Syncer) Remove(units []unit.Unit) error {
 }
 
 func (s *Syncer) StopUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("stop", names...)
+	return s.transitionUnits("stop", units)
 }
 
 func (s *Syncer) StartUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("start", names...)
+	return s.transitionUnits("start", units)
 }
 
 func (s *Syncer) RestartUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("try-restart", names...)
+	return s.transitionUnits("try-restart", units)
 }
 
 func (s *Syncer) Add(srcDir string, units []unit.Unit) error {
@@ -105,6 +94,16 @@ func (s *Syncer) runSystemctl(verb string, args ...string) error {
 	}
 
 	return err
+}
+
+func (s *Syncer) transitionUnits(verb string, units []unit.Unit) error {
+	if len(units) == 0 {
+		return nil
+	}
+
+	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
+	names = slices.DeleteFunc(names, func(n string) bool { return n == "" })
+	return s.runSystemctl(verb, names...)
 }
 
 func (s *Syncer) dryPrint(action string, args ...any) {

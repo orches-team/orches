@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -88,7 +89,7 @@ func main() {
 		Use:   "sync",
 		Short: "Sync deployments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmdSync(getRootFlags(cmd)); err != nil {
+			if _, err := cmdSync(getRootFlags(cmd)); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -116,9 +117,16 @@ func main() {
 			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
 			for {
-				if err := cmdSync(getRootFlags(cmd)); err != nil {
+				res, err := cmdSync(getRootFlags(cmd))
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "%v\n", err)
 				}
+
+				if res.restartNeeded {
+					fmt.Println("Restart needed, exiting.")
+					return nil
+				}
+
 				select {
 				case <-sig:
 					fmt.Println("Received signal, exiting.")
@@ -218,7 +226,7 @@ func initRepo(remote string, flags rootFlags) error {
 		}
 		defer os.RemoveAll(blank)
 
-		if err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
+		if _, err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -231,10 +239,14 @@ func initRepo(remote string, flags rootFlags) error {
 	})
 }
 
-func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) error {
+type syncResult struct {
+	restartNeeded bool
+}
+
+func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) (*syncResult, error) {
 	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
 		fmt.Println("No changes to process.")
-		return nil
+		return &syncResult{}, nil
 	}
 
 	if len(added) > 0 {
@@ -252,59 +264,74 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 		User: isUser(),
 	}
 
+	isOrches := func(u unit.Unit) bool { return u.Name() == "orches.container" }
+
+	restartNeeded := false
+
+	if slices.ContainsFunc(modified, isOrches) {
+		fmt.Println("Restart needed due to orches.container change")
+		restartNeeded = true
+	} else if slices.ContainsFunc(removed, isOrches) {
+		fmt.Println("Restart needed due to orches.container removal")
+		restartNeeded = true
+	}
+
 	if err := s.CreateDirs(); err != nil {
-		return fmt.Errorf("failed to create directories: %w", err)
+		return nil, fmt.Errorf("failed to create directories: %w", err)
 	}
 
 	if err := s.StopUnits(removed); err != nil {
-		return fmt.Errorf("failed to stop unit: %w", err)
+		return nil, fmt.Errorf("failed to stop unit: %w", err)
 	}
 
 	if err := s.Remove(removed); err != nil {
-		return fmt.Errorf("failed to remove unit: %w", err)
+		return nil, fmt.Errorf("failed to remove unit: %w", err)
 	}
 
 	if err := s.Add(newDir, append(added, modified...)); err != nil {
-		return fmt.Errorf("failed to add unit: %w", err)
+		return nil, fmt.Errorf("failed to add unit: %w", err)
 	}
 
 	if err := s.ReloadDaemon(); err != nil {
-		return fmt.Errorf("failed to reload daemon: %w", err)
+		return nil, fmt.Errorf("failed to reload daemon: %w", err)
 	}
 
 	if err := s.RestartUnits(modified); err != nil {
-		return fmt.Errorf("failed to restart unit: %w", err)
+		return nil, fmt.Errorf("failed to restart unit: %w", err)
 	}
 
 	if err := s.StartUnits(append(added, modified...)); err != nil {
-		return fmt.Errorf("failed to start unit: %w", err)
+		return nil, fmt.Errorf("failed to start unit: %w", err)
 	}
 
-	return nil
+	return &syncResult{restartNeeded: restartNeeded}, nil
 }
 
-func syncDirs(old, new string, dryRun bool) error {
+func syncDirs(old, new string, dryRun bool) (*syncResult, error) {
 	oldUnits, err := listUnits(old)
 	if err != nil {
-		return fmt.Errorf("failed to list old files: %w", err)
+		return nil, fmt.Errorf("failed to list old files: %w", err)
 	}
 
 	newUnits, err := listUnits(new)
 	if err != nil {
-		return fmt.Errorf("failed to list new files: %w", err)
+		return nil, fmt.Errorf("failed to list new files: %w", err)
 	}
 
 	added, removed, modified := diffUnits(oldUnits, newUnits)
 
-	if err := processChanges(new, added, removed, modified, dryRun); err != nil {
-		return fmt.Errorf("failed to process changes: %w", err)
+	res, err := processChanges(new, added, removed, modified, dryRun)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process changes: %w", err)
 	}
 
-	return nil
+	return res, nil
 }
 
-func cmdSync(flags rootFlags) error {
-	return lock(func() error {
+func cmdSync(flags rootFlags) (*syncResult, error) {
+	var res *syncResult
+
+	err := lock(func() error {
 		repoDir := filepath.Join(baseDir, "repo")
 
 		repo := git.Repo{Path: repoDir}
@@ -354,7 +381,9 @@ func cmdSync(flags rootFlags) error {
 			}
 		}
 
-		if err := syncDirs(oldState.Path, newState.Path, flags.dryRun); err != nil {
+		res, err = syncDirs(oldState.Path, newState.Path, flags.dryRun)
+
+		if err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -362,6 +391,7 @@ func cmdSync(flags rootFlags) error {
 
 		return nil
 	})
+	return res, err
 }
 
 func cmdPrune(flags rootFlags) error {
@@ -373,7 +403,7 @@ func cmdPrune(flags rootFlags) error {
 		defer os.RemoveAll(blank)
 
 		repoDir := filepath.Join(baseDir, "repo")
-		if err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
+		if _, err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -404,7 +434,7 @@ func cmdSwitch(remote string, flags rootFlags) error {
 		}
 		defer os.RemoveAll(newRepo)
 
-		if err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
+		if _, err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
