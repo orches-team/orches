@@ -9,3 +9,4 @@ FROM registry.access.redhat.com/ubi9/ubi
 RUN dnf install -y git-core && dnf clean all
 COPY --from=builder /src/orches /usr/local/bin/orches
 ENTRYPOINT ["/usr/local/bin/orches"]
+WORKDIR /usr/local/bin
