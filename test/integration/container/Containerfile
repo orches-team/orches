@@ -1,0 +1,12 @@
+FROM registry.access.redhat.com/ubi9-init
+
+RUN dnf install -y podman git-core && dnf clean all && \
+    git config --global user.email "orches@example.com" && \
+    git config --global user.name "Orches Test"
+
+ADD /containers.conf /etc/containers/containers.conf
+
+VOLUME /var/lib/containers
+
+ENV _CONTAINERS_USERNS_CONFIGURED="" \
+    BUILDAH_ISOLATION=chroot
