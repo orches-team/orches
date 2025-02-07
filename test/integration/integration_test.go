@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,30 +15,29 @@ import (
 var cid string
 
 func TestMain(m *testing.M) {
-	
+
 	code := 1
 	defer func() { os.Exit(code) }()
 
 	tmpDir, err := os.MkdirTemp("", "orches-test-")
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("failed to create orches temp dir: %v", err))
 	}
 	defer os.RemoveAll(tmpDir)
 
 	err = utils.ExecNoOutput("go", "build", "-o", tmpDir+"/orches", "../../cmd/orches")
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("failed to build orches: %v", err))
 	}
 
 	err = utils.ExecNoOutput("podman", "build", "-t", "orches-testbase", "./container")
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("failed to build orches-testbase: %v", err))
 	}
 
 	c, err := utils.ExecOutput("podman", "run", "--quiet", "--rm", "-d", "-v", tmpDir+":/app:Z", "-v", "./testdata:/testdata:ro,Z", "--privileged", "orches-testbase")
-
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("failed to run orches-testbase: %v", err))
 	}
 	cid = strings.TrimSpace(string(c))
 
@@ -49,11 +49,6 @@ func TestMain(m *testing.M) {
 	}()
 
 	code = m.Run()
-
-	err = utils.ExecNoOutput("podman", "stop", cid)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func run(t *testing.T, args ...string) []byte {
