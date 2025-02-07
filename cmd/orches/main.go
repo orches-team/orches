@@ -1,27 +1,34 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/orches-team/orches/pkg/git"
 	"github.com/orches-team/orches/pkg/syncer"
-	"github.com/orches-team/orches/pkg/unit"
-	"github.com/orches-team/orches/pkg/utils"
 	"github.com/spf13/cobra"
 )
+
+const version = "0.1.0-dev"
 
 var baseDir string
 
 func init() {
-	if isUser() {
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		baseDir = "/var/lib/orches"
+	} else if os.Getuid() != 0 {
 		dir, err := os.UserHomeDir()
 		if err != nil {
 			panic(fmt.Sprintf("failed to get user home directory: %v", err))
@@ -37,47 +44,135 @@ type rootFlags struct {
 	dryRun bool
 }
 
+type daemonCommand struct {
+	Name string `json:"name"`
+	Arg  string `json:"arg"`
+}
+
+func handleConnection(sock net.Listener, cmdChan chan<- daemonCommand, resultChan <-chan string) error {
+	conn, err := sock.Accept()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	var cmd daemonCommand
+	if err := json.NewDecoder(conn).Decode(&cmd); err != nil {
+		return err
+	}
+
+	slog.Debug("Received command", "name", cmd.Name, "arg", cmd.Arg)
+
+	cmdChan <- cmd
+	status := <-resultChan
+	_, err = io.Copy(conn, strings.NewReader(status))
+	if err != nil {
+		return fmt.Errorf("failed to send the status: %w", err)
+	}
+
+	return nil
+}
+
+func waitForCommands(sock net.Listener) (<-chan daemonCommand, chan<- string) {
+	cmdChan := make(chan daemonCommand)
+	resultChan := make(chan string)
+
+	go func() {
+		for {
+			err := handleConnection(sock, cmdChan, resultChan)
+			if errors.Is(err, net.ErrClosed) {
+				fmt.Fprintf(os.Stderr, "Socket closed, stopping the listener.\n")
+				break
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to handle connection: %v\n", err)
+			}
+		}
+	}()
+
+	return cmdChan, resultChan
+}
+
 func getRootFlags(cmd *cobra.Command) rootFlags {
 	dryRun, _ := cmd.Flags().GetBool("dry")
 	return rootFlags{dryRun: dryRun}
 }
 
-func isUser() bool {
-	return os.Getuid() != 0
+func socketPath() string {
+	return path.Join(baseDir, "socket")
+}
+
+func socketExists() bool {
+	_, err := os.Stat(socketPath())
+	return err == nil
+}
+
+func sendMessageToDaemon(cmd daemonCommand) (string, error) {
+	if !socketExists() {
+		return "", nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Sending %s command to the daemon\n", cmd.Name)
+
+	conn, err := net.Dial("unix", socketPath())
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	if err := json.NewEncoder(conn).Encode(cmd); err != nil {
+		return "", err
+	}
+
+	result, err := io.ReadAll(conn)
+	if err != nil {
+		return "", err
+	}
+
+	// sanity check
+	if len(result) == 0 {
+		return "", fmt.Errorf("empty response from the daemon")
+	}
+
+	return string(result), nil
 }
 
 func main() {
 	var rootCmd = &cobra.Command{
-		Use: "orches",
+		Version: version,
+		Use:     "orches",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			level := slog.LevelWarn
-			verboseLevel, _ := cmd.Flags().GetCount("verbose")
-			if verboseLevel == 1 {
-				level = slog.LevelInfo
-			} else if verboseLevel > 1 {
+			level := slog.LevelInfo
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			if verbose {
 				level = slog.LevelDebug
 			}
 			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 				Level: level,
 			}))
 			slog.SetDefault(logger)
+			if verbose {
+				slog.Debug("Verbose output enabled")
+			}
 
-			slog.Info("Verbose", "level", verboseLevel)
+			slog.Debug("Base directory", "path", baseDir)
+			slog.Debug("uid", "uid", os.Getuid())
 		},
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 	rootCmd.PersistentFlags().Bool("dry", false, "Dry run")
-	rootCmd.PersistentFlags().CountP("verbose", "v", "Verbose output")
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose output")
 
 	var initCmd = &cobra.Command{
 		Use:   "init [remote]",
 		Short: "Initialize by cloning a repo and setting up state.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := initRepo(args[0], getRootFlags(cmd)); err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-				os.Exit(1)
+			if socketExists() {
+				return errors.New("daemon is already running, cannot init")
 			}
-			return nil
+			return initRepo(args[0], getRootFlags(cmd))
 		},
 	}
 
@@ -85,11 +180,18 @@ func main() {
 		Use:   "sync",
 		Short: "Sync deployments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmdSync(getRootFlags(cmd)); err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-				os.Exit(1)
+			dc := daemonCommand{Name: "sync"}
+			remoteRes, err := sendMessageToDaemon(dc)
+			if err != nil {
+				return fmt.Errorf("failed to send message to daemon: %w", err)
 			}
-			return nil
+			if remoteRes != "" {
+				fmt.Fprintf(os.Stderr, "Daemon responded: %s\n", remoteRes)
+				return nil
+			}
+
+			_, err = cmdSync(getRootFlags(cmd))
+			return err
 		},
 	}
 
@@ -97,10 +199,68 @@ func main() {
 		Use:   "prune",
 		Short: "Prune deployments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmdPrune(getRootFlags(cmd)); err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-				os.Exit(1)
+			dc := daemonCommand{Name: "prune"}
+			remoteRes, err := sendMessageToDaemon(dc)
+			if err != nil {
+				return fmt.Errorf("failed to send message to daemon: %w", err)
 			}
+			if remoteRes != "" {
+				fmt.Fprintf(os.Stderr, "Daemon responded:\n%s\n", remoteRes)
+				return nil
+			}
+			return cmdPrune(getRootFlags(cmd))
+		},
+	}
+
+	var switchCmd = &cobra.Command{
+		Use:   "switch [remote]",
+		Short: "Switch to a different deployment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// absolute path is important for the daemon
+			p, err := filepath.Abs(args[0])
+			if err != nil {
+				return fmt.Errorf("failed to get absolute path: %w", err)
+			}
+
+			dc := daemonCommand{Name: "switch", Arg: p}
+			remoteRes, err := sendMessageToDaemon(dc)
+			if err != nil {
+				return fmt.Errorf("failed to send message to daemon: %w", err)
+			}
+			if remoteRes != "" {
+				fmt.Fprintf(os.Stderr, "Daemon responded:\n%s\n", remoteRes)
+				return nil
+			}
+
+			return cmdSwitch(p, getRootFlags(cmd))
+		},
+	}
+
+	var statusCmd = &cobra.Command{
+		Use:   "status",
+		Short: "Show the repository status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dc := daemonCommand{Name: "status"}
+			remoteRes, err := sendMessageToDaemon(dc)
+			if err != nil {
+				return fmt.Errorf("failed to send message to daemon: %w", err)
+			}
+			if remoteRes != "" {
+				fmt.Fprintf(os.Stderr, "Daemon responded:\n%s\n", remoteRes)
+				return nil
+			}
+
+			if _, err := os.Stat(path.Join(baseDir, "repo")); errors.Is(err, os.ErrNotExist) {
+				return errors.New("no repository found, initalize orches first")
+			}
+			result, err := cmdStatus()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("%s\n", result)
+
 			return nil
 		},
 	}
@@ -109,298 +269,374 @@ func main() {
 		Use:   "run",
 		Short: "Periodically sync deployments",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			syncInterval, err := cmd.Flags().GetInt("interval")
+			if err != nil {
+				return err
+			}
+
+			if _, err := os.Stat(path.Join(baseDir, "repo")); errors.Is(err, os.ErrNotExist) {
+				return errors.New("no repository found, initalize orches first")
+			}
+
+			sock, err := net.Listen("unix", socketPath())
+			if err != nil {
+				return fmt.Errorf("failed to start the daemon socket: %w", err)
+			}
+			defer sock.Close()
+
+			cmdChan, statusChan := waitForCommands(sock)
+
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sig)
 
 			for {
-				if err := cmdSync(getRootFlags(cmd)); err != nil {
-					fmt.Fprintf(os.Stderr, "%v\n", err)
+				res, err := cmdSync(getRootFlags(cmd))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error while running periodic sync: %v\n", err)
 				}
-				select {
-				case <-sig:
-					fmt.Println("Received signal, exiting.")
+
+				if res != nil && res.RestartNeeded {
+					fmt.Fprintln(os.Stderr, "Restart needed after a periodical sync, exiting.")
 					return nil
-				case <-time.After(1 * time.Minute):
+				}
+
+				nextTick := time.After(time.Duration(syncInterval) * time.Second)
+
+			innerLoop:
+				for {
+					select {
+					case <-sig:
+						fmt.Fprintln(os.Stderr, "Received interrupt signal, exiting.")
+						return nil
+					case c := <-cmdChan:
+						switch c.Name {
+						case "sync":
+							_, err := cmdSync(getRootFlags(cmd))
+							if err != nil {
+								statusChan <- fmt.Sprintf("%v", err)
+								fmt.Fprintf(os.Stderr, "Remote sync command failed: %v\n", err)
+							} else {
+								statusChan <- "Synced"
+								fmt.Fprintln(os.Stderr, "Remote sync command successfully processed.")
+							}
+							if res != nil && res.RestartNeeded {
+								fmt.Fprintln(os.Stderr, "Restart needed after a remote sync, exiting.")
+								return nil
+							}
+						case "prune":
+							err := cmdPrune(getRootFlags(cmd))
+							if err != nil {
+								statusChan <- fmt.Sprintf("%v", err)
+								fmt.Fprintf(os.Stderr, "Remote prune command failed: %v\n", err)
+							} else {
+								statusChan <- "Pruned"
+								fmt.Fprintln(os.Stderr, "Remote prune command successfully processed, exiting.")
+								return nil
+							}
+						case "switch":
+							err := cmdSwitch(c.Arg, getRootFlags(cmd))
+							if err != nil {
+								statusChan <- fmt.Sprintf("%v", err)
+								fmt.Fprintf(os.Stderr, "Remote switch (%s) command failed: %v\n", c.Arg, err)
+							} else {
+								statusChan <- fmt.Sprintf("Switched to %s", c.Arg)
+								fmt.Fprintf(os.Stderr, "Remote switch (%s) command successfully processed.\n", c.Arg)
+							}
+						case "status":
+							res, err := cmdStatus()
+							if err != nil {
+								statusChan <- fmt.Sprintf("%v", err)
+								fmt.Fprintf(os.Stderr, "Remote status command failed: %v\n", err)
+							} else {
+								statusChan <- res
+								fmt.Fprintln(os.Stderr, "Remote status command successfully processed.")
+							}
+						default:
+							statusChan <- "Unknown command"
+							fmt.Fprintf(os.Stderr, "Received unknown remote command: %s\n", c.Name)
+						}
+					case <-nextTick:
+						break innerLoop
+					}
 				}
 			}
 		},
 	}
 
-	var switchCmd = &cobra.Command{
-		Use:   "switch",
-		Short: "Switch to a different deployment",
-		Args:  cobra.ExactArgs(1),
+	runCmd.Flags().Int("interval", 120, "Interval in seconds")
+
+	var versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmdSwitch(args[0], getRootFlags(cmd)); err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-				os.Exit(1)
+			info, ok := debug.ReadBuildInfo()
+			if !ok {
+				return errors.New("no build info available")
 			}
+
+			buildinfo := struct {
+				version string
+				ref     string
+				time    string
+			}{
+				version: version,
+				ref:     "unknown",
+				time:    "unknown",
+			}
+
+			for _, val := range info.Settings {
+				switch val.Key {
+				case "vcs.revision":
+					buildinfo.ref = val.Value
+				case "vcs.time":
+					buildinfo.time = val.Value
+				}
+			}
+
+			fmt.Printf("version: %s\n", buildinfo.version)
+			fmt.Printf("gitref: %s\n", buildinfo.ref)
+			fmt.Printf("buildtime: %s\n", buildinfo.time)
+
 			return nil
 		},
 	}
 
-	rootCmd.AddCommand(initCmd, syncCmd, pruneCmd, runCmd, switchCmd)
-	rootCmd.Execute()
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return fmt.Errorf("%w\nSee '%s --help'", err, cmd.CommandPath())
+	})
+
+	rootCmd.AddCommand(initCmd, syncCmd, pruneCmd, runCmd, switchCmd, statusCmd, versionCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func lock(fn func() error) error {
+	os.Mkdir(baseDir, 0755)
+
+	slog.Debug("Adding interrupt signal handler in lock()")
+	interruptSig := make(chan os.Signal, 1)
+	signal.Notify(interruptSig, os.Interrupt, syscall.SIGTERM)
+
+	defer func() {
+		signal.Stop(interruptSig)
+		slog.Debug("Removed interrupt signal handler in lock()")
+	}()
+
+	var f *os.File
+	var err error
+	for {
+		f, err = os.OpenFile(path.Join(baseDir, "lock"), os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			break
+		}
+		slog.Debug("Failed to acquire lock, retrying", "error", err)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-interruptSig:
+			return errors.New("interrupted while waiting for a lock")
+		}
+	}
+
+	defer f.Close()
+	defer func() {
+		err := os.Remove(f.Name())
+		if err != nil {
+			slog.Error("Failed to remove lock file", "error", err)
+		}
+		slog.Debug("Removed lock")
+	}()
+
+	slog.Debug("Acquired lock")
+
+	return fn()
 }
 
 func initRepo(remote string, flags rootFlags) error {
-	repoPath := filepath.Join(baseDir, "repo")
+	return lock(func() error {
+		repoPath := filepath.Join(baseDir, "repo")
 
-	if _, err := os.Stat(baseDir); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("repository already exists at %s", repoPath)
-	}
-
-	if _, err := git.Clone(remote, repoPath); err != nil {
-		return fmt.Errorf("failed to clone repo: %w", err)
-	}
-
-	blank, err := os.MkdirTemp("", "orches-initial-sync-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(blank)
-
-	if err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
-
-	if flags.dryRun {
-		if err := os.RemoveAll(baseDir); err != nil {
-			return fmt.Errorf("failed to remove directory: %w", err)
+		if _, err := os.Stat(repoPath); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("repository already exists at %s", repoPath)
 		}
-	}
-	return nil
-}
 
-func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) error {
-	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
-		fmt.Println("No changes to process.")
-		return nil
-	}
-
-	if len(added) > 0 {
-		fmt.Printf("Added: %v\n", utils.MapSlice(added, func(u unit.Unit) string { return u.Name() }))
-	}
-	if len(removed) > 0 {
-		fmt.Printf("Removed: %v\n", utils.MapSlice(removed, func(u unit.Unit) string { return u.Name() }))
-	}
-	if len(modified) > 0 {
-		fmt.Printf("Modified: %v\n", utils.MapSlice(modified, func(u unit.Unit) string { return u.Name() }))
-	}
-
-	s := syncer.Syncer{
-		Dry:  dryRun,
-		User: isUser(),
-	}
-
-	if err := s.CreateDirs(); err != nil {
-		return fmt.Errorf("failed to create directories: %w", err)
-	}
-
-	if err := s.StopUnits(removed); err != nil {
-		return fmt.Errorf("failed to stop unit: %w", err)
-	}
-
-	if err := s.Remove(removed); err != nil {
-		return fmt.Errorf("failed to remove unit: %w", err)
-	}
-
-	if err := s.Add(newDir, append(added, modified...)); err != nil {
-		return fmt.Errorf("failed to add unit: %w", err)
-	}
-
-	if err := s.ReloadDaemon(); err != nil {
-		return fmt.Errorf("failed to reload daemon: %w", err)
-	}
-
-	if err := s.RestartUnits(modified); err != nil {
-		return fmt.Errorf("failed to restart unit: %w", err)
-	}
-
-	if err := s.StartUnits(append(added, modified...)); err != nil {
-		return fmt.Errorf("failed to start unit: %w", err)
-	}
-
-	return nil
-}
-
-func syncDirs(old, new string, dryRun bool) error {
-	oldUnits, err := listUnits(old)
-	if err != nil {
-		return fmt.Errorf("failed to list old files: %w", err)
-	}
-
-	newUnits, err := listUnits(new)
-	if err != nil {
-		return fmt.Errorf("failed to list new files: %w", err)
-	}
-
-	added, removed, modified := diffUnits(oldUnits, newUnits)
-
-	if err := processChanges(new, added, removed, modified, dryRun); err != nil {
-		return fmt.Errorf("failed to process changes: %w", err)
-	}
-
-	return nil
-}
-
-func cmdSync(flags rootFlags) error {
-	// TODO: implement locking
-	repoDir := filepath.Join(baseDir, "repo")
-
-	repo := git.Repo{Path: repoDir}
-	oldState, err := repo.NewWorktree("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
-	}
-	defer oldState.Cleanup()
-
-	beforeRef, err := repo.Ref("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get ref: %w", err)
-	}
-
-	remoteURL, err := repo.RemoteURL("origin")
-	if err != nil {
-		return fmt.Errorf("failed to get remote URL: %w", err)
-	}
-
-	fmt.Printf("Pulling from %s\n", remoteURL)
-
-	if err := repo.Pull(); err != nil {
-		return fmt.Errorf("failed to pull repo: %w", err)
-	}
-
-	afterRef, err := repo.Ref("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get ref: %w", err)
-	}
-
-	if beforeRef == afterRef {
-		fmt.Println("No new commits to sync.")
-		return nil
-	}
-
-	newState, err := repo.NewWorktree("HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
-	}
-	defer newState.Cleanup()
-
-	fmt.Printf("Syncing %s..%s\n", beforeRef, afterRef)
-
-	if flags.dryRun {
-		if err := repo.Reset(beforeRef); err != nil {
-			return fmt.Errorf("dry run error: failed to reset repo: %w", err)
+		if _, err := git.Clone(remote, repoPath); err != nil {
+			return fmt.Errorf("failed to clone repo: %w", err)
 		}
-	}
 
-	if err := syncDirs(oldState.Path, newState.Path, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		blank, err := os.MkdirTemp("", "orches-initial-sync-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
+		defer os.RemoveAll(blank)
 
-	fmt.Printf("Synced to %s\n", afterRef)
+		if _, err := syncer.SyncDirs(blank, repoPath, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
 
-	return nil
+		if flags.dryRun {
+			if err := os.RemoveAll(baseDir); err != nil {
+				return fmt.Errorf("failed to remove directory: %w", err)
+			}
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "Initialized repo from %s\n", remote)
+		return nil
+	})
+}
+
+func cmdSync(flags rootFlags) (*syncer.SyncResult, error) {
+	var res *syncer.SyncResult
+
+	err := lock(func() error {
+		repoDir := filepath.Join(baseDir, "repo")
+
+		repo := git.Repo{Path: repoDir}
+		oldState, err := repo.NewWorktree("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
+		defer oldState.Cleanup()
+
+		beforeRef, err := repo.Ref("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to get ref: %w", err)
+		}
+
+		remoteURL, err := repo.RemoteURL("origin")
+		if err != nil {
+			return fmt.Errorf("failed to get remote URL: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Syncing from %s\n", remoteURL)
+
+		if err := repo.Pull(); err != nil {
+			return fmt.Errorf("failed to pull repo: %w", err)
+		}
+
+		afterRef, err := repo.Ref("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to get ref: %w", err)
+		}
+
+		if beforeRef == afterRef {
+			fmt.Fprintln(os.Stderr, "No new commits to sync.")
+			return nil
+		}
+
+		newState, err := repo.NewWorktree("HEAD")
+		if err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
+		defer newState.Cleanup()
+
+		fmt.Fprintf(os.Stderr, "Syncing %s..%s\n", beforeRef, afterRef)
+
+		if flags.dryRun {
+			if err := repo.Reset(beforeRef); err != nil {
+				return fmt.Errorf("dry run error: failed to reset repo: %w", err)
+			}
+		}
+
+		res, err = syncer.SyncDirs(oldState.Path, newState.Path, flags.dryRun)
+
+		if err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Synced to %s\n", afterRef)
+		return nil
+	})
+	return res, err
 }
 
 func cmdPrune(flags rootFlags) error {
-	blank, err := os.MkdirTemp("", "orches-prune-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(blank)
+	return lock(func() error {
+		repoDir := filepath.Join(baseDir, "repo")
+		if _, err := os.Stat(repoDir); errors.Is(err, os.ErrNotExist) {
+			return errors.New("no repository to prune, orches not initialized")
+		}
 
-	repoDir := filepath.Join(baseDir, "repo")
-	if err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		blank, err := os.MkdirTemp("", "orches-prune-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
+		defer os.RemoveAll(blank)
 
-	if flags.dryRun {
-		fmt.Printf("Remove %s\n", repoDir)
+		if _, err := syncer.SyncDirs(repoDir, blank, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
+
+		if flags.dryRun {
+			fmt.Fprintf(os.Stderr, "Remove %s\n", repoDir)
+			return nil
+		}
+
+		if err := os.RemoveAll(repoDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "Repository pruned\n")
 		return nil
-	}
-
-	if err := os.RemoveAll(baseDir); err != nil {
-		return fmt.Errorf("failed to remove directory: %w", err)
-	}
-
-	return nil
+	})
 }
 
 func cmdSwitch(remote string, flags rootFlags) error {
-	repoDir := path.Join(baseDir, "repo")
+	return lock(func() error {
+		repoDir := path.Join(baseDir, "repo")
 
-	newRepo, err := os.MkdirTemp(baseDir, "orches-switch-")
-	if err != nil {
-		return fmt.Errorf("failed to create temporary directory: %w", err)
-	}
+		newRepo, err := os.MkdirTemp(baseDir, "orches-switch-")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary directory: %w", err)
+		}
 
-	if _, err := git.Clone(remote, newRepo); err != nil {
-		return fmt.Errorf("failed to clone repo: %w", err)
-	}
-	defer os.RemoveAll(newRepo)
+		if _, err := git.Clone(remote, newRepo); err != nil {
+			return fmt.Errorf("failed to clone repo: %w", err)
+		}
+		defer os.RemoveAll(newRepo)
 
-	if err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
+		if _, err := syncer.SyncDirs(repoDir, newRepo, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to sync directories: %w", err)
+		}
 
-	if flags.dryRun {
+		if flags.dryRun {
+			return nil
+		}
+
+		if err := os.RemoveAll(repoDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+
+		if err := os.Rename(newRepo, repoDir); err != nil {
+			return fmt.Errorf("failed to rename directory: %w", err)
+		}
+
 		return nil
-	}
-
-	if err := os.RemoveAll(repoDir); err != nil {
-		return fmt.Errorf("failed to remove directory: %w", err)
-	}
-
-	if err := os.Rename(newRepo, repoDir); err != nil {
-		return fmt.Errorf("failed to rename directory: %w", err)
-	}
-
-	return nil
+	})
 }
 
-func listUnits(dir string) (map[string]unit.Unit, error) {
-	files := make(map[string]unit.Unit)
-	entries, err := os.ReadDir(dir)
+func cmdStatus() (string, error) {
+	repoDir := path.Join(baseDir, "repo")
+	if _, err := os.Stat(repoDir); errors.Is(err, os.ErrNotExist) {
+		return "", errors.New("no repository found, initalize orches first")
+	}
+
+	repo := git.Repo{Path: repoDir}
+
+	remoteURL, err := repo.RemoteURL("origin")
 	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		u, err := unit.New(dir, entry.Name())
-		var e *unit.ErrUnknownUnitType
-		if errors.As(err, &e) {
-			slog.Info("Skipping unknown unit type", "unit", entry.Name())
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-
-		files[entry.Name()] = u
-	}
-	return files, err
-}
-
-func diffUnits(old, new map[string]unit.Unit) (added, removed, changed []unit.Unit) {
-	for file, u := range old {
-		if _, exists := new[file]; !exists {
-			removed = append(removed, u)
-		}
-	}
-	for file, u := range new {
-		if _, exists := old[file]; !exists {
-			added = append(added, u)
-		}
-	}
-	for file, u := range new {
-		if oldU, exists := old[file]; exists && !u.EqualContent(oldU) {
-			changed = append(changed, u)
-		}
+		return "", fmt.Errorf("failed to get remote URL: %w", err)
 	}
 
-	return
+	head, err := repo.Ref("HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	buf := fmt.Sprintf("remote: %s\nref: %s", remoteURL, head)
+	return buf, nil
 }

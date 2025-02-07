@@ -42,27 +42,15 @@ func (s *Syncer) Remove(units []unit.Unit) error {
 }
 
 func (s *Syncer) StopUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("stop", names...)
+	return s.transitionUnits("stop", units)
 }
 
 func (s *Syncer) StartUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("start", names...)
+	return s.transitionUnits("start", units)
 }
 
 func (s *Syncer) RestartUnits(units []unit.Unit) error {
-	if len(units) == 0 {
-		return nil
-	}
-	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	return s.runSystemctl("try-restart", names...)
+	return s.transitionUnits("try-restart", units)
 }
 
 func (s *Syncer) Add(srcDir string, units []unit.Unit) error {
@@ -107,9 +95,18 @@ func (s *Syncer) runSystemctl(verb string, args ...string) error {
 	return err
 }
 
+func (s *Syncer) transitionUnits(verb string, units []unit.Unit) error {
+	if len(units) == 0 {
+		return nil
+	}
+
+	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
+	return s.runSystemctl(verb, names...)
+}
+
 func (s *Syncer) dryPrint(action string, args ...any) {
 	if s.Dry {
-		fmt.Printf("%s: %v\n", action, args)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", action, args)
 	}
 	slog.Debug(fmt.Sprintf("syncer: %s", action), "args", args)
 }
