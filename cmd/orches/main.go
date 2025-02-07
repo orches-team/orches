@@ -304,11 +304,11 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 	toRestart := modified
 	toStop := removed
 	if slices.ContainsFunc(modified, isOrches) {
-		toRestart = slices.DeleteFunc(modified, isOrches)
+		toRestart = slices.DeleteFunc(append([]unit.Unit{}, modified...), isOrches)
 		fmt.Println("Orches.container was changed")
 		restartNeeded = true
 	} else if slices.ContainsFunc(removed, isOrches) {
-		toStop = slices.DeleteFunc(removed, isOrches)
+		toStop = slices.DeleteFunc(append([]unit.Unit{}, removed...), isOrches)
 		fmt.Println("orches.container was removed")
 		restartNeeded = true
 	}
