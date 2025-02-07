@@ -123,7 +123,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "%v\n", err)
 				}
 
-				if res.restartNeeded {
+				if res != nil && res.restartNeeded {
 					fmt.Println("Restart needed, exiting.")
 					return nil
 				}
