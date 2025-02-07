@@ -15,7 +15,6 @@ import (
 var cid string
 
 func TestMain(m *testing.M) {
-
 	code := 1
 	defer func() { os.Exit(code) }()
 
@@ -71,7 +70,11 @@ func addFile(t *testing.T, path, content string) {
 	cmd := exec.Command("podman", "exec", "-i", cid, "tee", path)
 	cmd.Stdin = strings.NewReader(content)
 
-	require.NoError(t, cmd.Run())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Log(string(out))
+		t.FailNow()
+	}
 }
 
 func TestHelp(t *testing.T) {
