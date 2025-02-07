@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path"
-	"slices"
 
 	"github.com/orches-team/orches/pkg/unit"
 	"github.com/orches-team/orches/pkg/utils"
@@ -102,7 +101,6 @@ func (s *Syncer) transitionUnits(verb string, units []unit.Unit) error {
 	}
 
 	names := utils.MapSlice(units, func(u unit.Unit) string { return u.SystemctlName() })
-	names = slices.DeleteFunc(names, func(n string) bool { return n == "" })
 	return s.runSystemctl(verb, names...)
 }
 

@@ -91,10 +91,6 @@ func (u *unit) Typ() UnitType {
 }
 
 func (u *unit) SystemctlName() string {
-	if u.Name() == "orches.container" {
-		return ""
-	}
-
 	switch u.Typ() {
 	case UnitTypeContainer:
 		return u.name[:len(u.name)-len(".container")] + ".service"
