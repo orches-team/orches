@@ -14,6 +14,7 @@ import (
 var cid string
 
 func TestMain(m *testing.M) {
+	
 	code := 1
 	defer func() { os.Exit(code) }()
 
