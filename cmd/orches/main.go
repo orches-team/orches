@@ -117,6 +117,11 @@ func main() {
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 
+			syncInterval, err := cmd.Flags().GetInt("interval")
+			if err != nil {
+				return err
+			}
+
 			for {
 				res, err := cmdSync(getRootFlags(cmd))
 				if err != nil {
@@ -132,11 +137,13 @@ func main() {
 				case <-sig:
 					fmt.Println("Received signal, exiting.")
 					return nil
-				case <-time.After(1 * time.Minute):
+				case <-time.After(time.Duration(syncInterval) * time.Second):
 				}
 			}
 		},
 	}
+
+	runCmd.Flags().Int("interval", 120, "Interval in seconds")
 
 	var switchCmd = &cobra.Command{
 		Use:   "switch",
@@ -184,7 +191,9 @@ func main() {
 	}
 
 	rootCmd.AddCommand(initCmd, syncCmd, pruneCmd, runCmd, switchCmd, versionCmd)
-	rootCmd.Execute()
+	if rootCmd.Execute() != nil {
+		os.Exit(1)
+	}
 }
 
 func lock(fn func() error) error {

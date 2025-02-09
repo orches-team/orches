@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/orches-team/orches/pkg/utils"
 	"github.com/stretchr/testify/assert"
@@ -54,6 +55,10 @@ func TestMain(m *testing.M) {
 	code = m.Run()
 }
 
+func cmd(args ...string) []string {
+	return append([]string{"podman", "exec", cid}, args...)
+}
+
 func run(t *testing.T, args ...string) []byte {
 	out, err := runUnchecked(args...)
 	require.NoError(t, err)
@@ -61,8 +66,7 @@ func run(t *testing.T, args ...string) []byte {
 }
 
 func runUnchecked(args ...string) ([]byte, error) {
-	args = append([]string{"podman", "exec", cid}, args...)
-	return utils.ExecOutput(args...)
+	return utils.ExecOutput(cmd(args...)...)
 }
 
 func runOrches(t *testing.T, args ...string) []byte {
@@ -104,7 +108,7 @@ const testdir = "/orchestest"
 
 func cleanup(t *testing.T) {
 	// ADD ALL UNITS USED IN TESTS HERE
-	for _, unit := range []string{"caddy", "caddy2"} {
+	for _, unit := range []string{"caddy", "caddy2", "orches"} {
 		runUnchecked("systemctl", "stop", unit)
 	}
 
@@ -201,5 +205,48 @@ PublishPort=8888:80
 
 	_, err = runUnchecked("ls", "/var/lib/orches/repo")
 	assert.Error(t, err)
+}
 
+func TestOrchesSelfUpdate(t *testing.T) {
+	defer cleanup(t)
+
+	run(t, "mkdir", "-p", testdir)
+	run(t, "git", "-C", testdir, "init")
+
+	// Let's mock orches with caddy
+	addOrchesFile(t, "/orchestest/orches.container", `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=8080:80
+`)
+
+	runOrches(t, "init", testdir)
+
+	out := run(t, "systemctl", "status", "orches")
+	assert.Contains(t, string(out), "Active: active (running)")
+
+	// Start the run process
+	syncCmd := cmd("/app/orches", "-vv", "run", "--interval", "1")
+	cmd := exec.Command(syncCmd[0], syncCmd[1:]...)
+	require.NoError(t, cmd.Start())
+
+	// Fake an update
+	addOrchesFile(t, "/orchestest/orches.container", `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=9090:80
+`)
+
+	// Wait for the sync for a bit
+	time.Sleep(2 * time.Second)
+
+	// Now let's verify the faked update
+	// The process itself should have died
+	require.NoError(t, cmd.Wait())
+
+	// The service should still be running (because orches doesn't stop itself)
+	out = run(t, "systemctl", "status", "orches")
+	assert.Contains(t, string(out), "Active: active (running)")
+
+	// But the service file should have been updated
+	out = run(t, "cat", "/etc/containers/systemd/orches.container")
+	assert.Contains(t, string(out), "9090:80")
 }
