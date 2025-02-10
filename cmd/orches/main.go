@@ -9,15 +9,12 @@ import (
 	"path"
 	"path/filepath"
 	"runtime/debug"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/orches-team/orches/pkg/git"
 	"github.com/orches-team/orches/pkg/syncer"
-	"github.com/orches-team/orches/pkg/unit"
-	"github.com/orches-team/orches/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +23,7 @@ var baseDir string
 func init() {
 	if _, err := os.Stat("/run/.containerenv"); err == nil {
 		baseDir = "/var/lib/orches"
-	} else if isUser() {
+	} else if os.Getuid() != 0 {
 		dir, err := os.UserHomeDir()
 		if err != nil {
 			panic(fmt.Sprintf("failed to get user home directory: %v", err))
@@ -45,10 +42,6 @@ type rootFlags struct {
 func getRootFlags(cmd *cobra.Command) rootFlags {
 	dryRun, _ := cmd.Flags().GetBool("dry")
 	return rootFlags{dryRun: dryRun}
-}
-
-func isUser() bool {
-	return os.Getuid() != 0
 }
 
 func main() {
@@ -128,7 +121,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "%v\n", err)
 				}
 
-				if res != nil && res.restartNeeded {
+				if res != nil && res.RestartNeeded {
 					fmt.Println("Restart needed, exiting.")
 					return nil
 				}
@@ -268,7 +261,7 @@ func initRepo(remote string, flags rootFlags) error {
 		}
 		defer os.RemoveAll(blank)
 
-		if _, err := syncDirs(blank, repoPath, flags.dryRun); err != nil {
+		if _, err := syncer.SyncDirs(blank, repoPath, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -281,101 +274,8 @@ func initRepo(remote string, flags rootFlags) error {
 	})
 }
 
-type syncResult struct {
-	restartNeeded bool
-}
-
-func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) (*syncResult, error) {
-	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
-		fmt.Println("No changes to process.")
-		return &syncResult{}, nil
-	}
-
-	if len(added) > 0 {
-		fmt.Printf("Added: %v\n", utils.MapSlice(added, func(u unit.Unit) string { return u.Name() }))
-	}
-	if len(removed) > 0 {
-		fmt.Printf("Removed: %v\n", utils.MapSlice(removed, func(u unit.Unit) string { return u.Name() }))
-	}
-	if len(modified) > 0 {
-		fmt.Printf("Modified: %v\n", utils.MapSlice(modified, func(u unit.Unit) string { return u.Name() }))
-	}
-
-	s := syncer.Syncer{
-		Dry:  dryRun,
-		User: isUser(),
-	}
-
-	isOrches := func(u unit.Unit) bool { return u.Name() == "orches.container" }
-
-	restartNeeded := false
-
-	toRestart := modified
-	toStop := removed
-	if slices.ContainsFunc(modified, isOrches) {
-		toRestart = slices.DeleteFunc(append([]unit.Unit{}, modified...), isOrches)
-		fmt.Println("Orches.container was changed")
-		restartNeeded = true
-	} else if slices.ContainsFunc(removed, isOrches) {
-		toStop = slices.DeleteFunc(append([]unit.Unit{}, removed...), isOrches)
-		fmt.Println("orches.container was removed")
-		restartNeeded = true
-	}
-
-	if err := s.CreateDirs(); err != nil {
-		return nil, fmt.Errorf("failed to create directories: %w", err)
-	}
-
-	if err := s.StopUnits(toStop); err != nil {
-		return nil, fmt.Errorf("failed to stop unit: %w", err)
-	}
-
-	if err := s.Remove(removed); err != nil {
-		return nil, fmt.Errorf("failed to remove unit: %w", err)
-	}
-
-	if err := s.Add(newDir, append(added, modified...)); err != nil {
-		return nil, fmt.Errorf("failed to add unit: %w", err)
-	}
-
-	if err := s.ReloadDaemon(); err != nil {
-		return nil, fmt.Errorf("failed to reload daemon: %w", err)
-	}
-
-	if err := s.RestartUnits(toRestart); err != nil {
-		return nil, fmt.Errorf("failed to restart unit: %w", err)
-	}
-
-	if err := s.StartUnits(append(added, toRestart...)); err != nil {
-		return nil, fmt.Errorf("failed to start unit: %w", err)
-	}
-
-	return &syncResult{restartNeeded: restartNeeded}, nil
-}
-
-func syncDirs(old, new string, dryRun bool) (*syncResult, error) {
-	oldUnits, err := listUnits(old)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list old files: %w", err)
-	}
-
-	newUnits, err := listUnits(new)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list new files: %w", err)
-	}
-
-	added, removed, modified := diffUnits(oldUnits, newUnits)
-
-	res, err := processChanges(new, added, removed, modified, dryRun)
-	if err != nil {
-		return nil, fmt.Errorf("failed to process changes: %w", err)
-	}
-
-	return res, nil
-}
-
-func cmdSync(flags rootFlags) (*syncResult, error) {
-	var res *syncResult
+func cmdSync(flags rootFlags) (*syncer.SyncResult, error) {
+	var res *syncer.SyncResult
 
 	err := lock(func() error {
 		repoDir := filepath.Join(baseDir, "repo")
@@ -427,7 +327,7 @@ func cmdSync(flags rootFlags) (*syncResult, error) {
 			}
 		}
 
-		res, err = syncDirs(oldState.Path, newState.Path, flags.dryRun)
+		res, err = syncer.SyncDirs(oldState.Path, newState.Path, flags.dryRun)
 
 		if err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
@@ -449,7 +349,7 @@ func cmdPrune(flags rootFlags) error {
 		defer os.RemoveAll(blank)
 
 		repoDir := filepath.Join(baseDir, "repo")
-		if _, err := syncDirs(repoDir, blank, flags.dryRun); err != nil {
+		if _, err := syncer.SyncDirs(repoDir, blank, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -480,7 +380,7 @@ func cmdSwitch(remote string, flags rootFlags) error {
 		}
 		defer os.RemoveAll(newRepo)
 
-		if _, err := syncDirs(repoDir, newRepo, flags.dryRun); err != nil {
+		if _, err := syncer.SyncDirs(repoDir, newRepo, flags.dryRun); err != nil {
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
@@ -498,49 +398,4 @@ func cmdSwitch(remote string, flags rootFlags) error {
 
 		return nil
 	})
-}
-
-func listUnits(dir string) (map[string]unit.Unit, error) {
-	files := make(map[string]unit.Unit)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		u, err := unit.New(dir, entry.Name())
-		var e *unit.ErrUnknownUnitType
-		if errors.As(err, &e) {
-			slog.Info("Skipping unknown unit type", "unit", entry.Name())
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-
-		files[entry.Name()] = u
-	}
-	return files, err
-}
-
-func diffUnits(old, new map[string]unit.Unit) (added, removed, changed []unit.Unit) {
-	for file, u := range old {
-		if _, exists := new[file]; !exists {
-			removed = append(removed, u)
-		}
-	}
-	for file, u := range new {
-		if _, exists := old[file]; !exists {
-			added = append(added, u)
-		}
-	}
-	for file, u := range new {
-		if oldU, exists := old[file]; exists && !u.EqualContent(oldU) {
-			changed = append(changed, u)
-		}
-	}
-
-	return
 }
