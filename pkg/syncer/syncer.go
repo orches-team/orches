@@ -106,7 +106,7 @@ func (s *Syncer) transitionUnits(verb string, units []unit.Unit) error {
 
 func (s *Syncer) dryPrint(action string, args ...any) {
 	if s.Dry {
-		fmt.Printf("%s: %v\n", action, args)
+		fmt.Fprintf(os.Stderr, "%s: %v\n", action, args)
 	}
 	slog.Debug(fmt.Sprintf("syncer: %s", action), "args", args)
 }

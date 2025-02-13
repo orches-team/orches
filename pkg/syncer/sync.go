@@ -83,18 +83,18 @@ func diffUnits(old, new map[string]unit.Unit) (added, removed, changed []unit.Un
 
 func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) (*SyncResult, error) {
 	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
-		fmt.Println("No changes to process.")
+		fmt.Fprintf(os.Stderr, "No changes to process.")
 		return &SyncResult{}, nil
 	}
 
 	if len(added) > 0 {
-		fmt.Printf("Added: %v\n", utils.MapSlice(added, func(u unit.Unit) string { return u.Name() }))
+		fmt.Fprintf(os.Stderr, "Added: %v\n", utils.MapSlice(added, func(u unit.Unit) string { return u.Name() }))
 	}
 	if len(removed) > 0 {
-		fmt.Printf("Removed: %v\n", utils.MapSlice(removed, func(u unit.Unit) string { return u.Name() }))
+		fmt.Fprintf(os.Stderr, "Removed: %v\n", utils.MapSlice(removed, func(u unit.Unit) string { return u.Name() }))
 	}
 	if len(modified) > 0 {
-		fmt.Printf("Modified: %v\n", utils.MapSlice(modified, func(u unit.Unit) string { return u.Name() }))
+		fmt.Fprintf(os.Stderr, "Modified: %v\n", utils.MapSlice(modified, func(u unit.Unit) string { return u.Name() }))
 	}
 
 	s := Syncer{
@@ -110,7 +110,7 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 	toStop := removed
 	if slices.ContainsFunc(modified, isOrches) {
 		toRestart = slices.DeleteFunc(append([]unit.Unit{}, modified...), isOrches)
-		fmt.Println("Orches.container was changed")
+		fmt.Println("orches.container was changed")
 		restartNeeded = true
 	} else if slices.ContainsFunc(removed, isOrches) {
 		toStop = slices.DeleteFunc(append([]unit.Unit{}, removed...), isOrches)
