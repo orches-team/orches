@@ -6,7 +6,7 @@
 orches is a simple git-ops tool for orchestrating [Podman](https://podman.io/) containers and systemd units on a single machine. It is loosely inspired by [Argo CD](https://argo-cd.readthedocs.io/en/stable/) and [Flux CD](https://fluxcd.io/), but without the need for Kubernetes.
 
 Containers in orches are defined by [Podman Quadlets](https://www.redhat.com/en/blog/quadlet-podman). A super simple example can look like this:
-```
+
 ```ini
 [Container]
 Image=docker.io/library/caddy:2.9.1-alpine
