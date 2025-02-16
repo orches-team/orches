@@ -45,4 +45,45 @@ These commands perform the following steps:
 
 1) Enabling [lingering](https://wiki.archlinux.org/title/Systemd/User#Automatic_start-up_of_systemd_user_instances) in order to launch orches and the apps it manages when the system boots.
 2) Creating directories that orches needs to run.
-3) Initializing orches by running its `init` subcommand. The extra flags given to `podman run` are needed so orches can control systemd user units. The last argument controls which repository is used for the initial deployment. In this case, the official rootless sample is used.
+3) Initializing orches by running its `init` subcommand. The extra flags given to `podman run` are needed so orches can control systemd user units. The last argument controls which repository is used for the initial deployment. In this case, the official rootless sample with orches and a dummy [caddy](https://caddyserver.com/) webserver is used.
+
+Once you run the command, you should be able to verify that orches, and the webserver is running:
+
+```bash
+systemctl --user status orches
+systemctl --user status caddy
+podman exec systemd-orches orches status
+curl localhost:8080
+```
+
+### Initializing orches with a rootful config
+To start using rootful orches, simply run the following commands:
+
+```bash
+sudo mkdir -p /var/lib/orches /etc/containers/systemd
+
+sudo podman run --rm -it --pid=host --pull=newer \
+  --mount \
+    type=bind,source=/run/systemd,destination=/run/systemd \
+  -v /var/lib/orches:/var/lib/orches \
+  -v /etc/containers/systemd:/etc/containers/systemd  \
+  ghcr.io/orches-team/orches init \
+  https://github.com/orches-team/orches-config-rootful.git
+```
+
+These commands perform the following steps:
+
+1) Creating directories that orches needs to run.
+2) Initializing orches by running its `init` subcommand. The extra flags given to `podman run` are needed so orches can control systemd user units. The last argument controls which repository is used for the initial deployment.  In this case, the official rootless sample with orches and a dummy [caddy](https://caddyserver.com/) webserver is used.
+
+Once you run the command, you should be able to verify that orches, and the webserver is running:
+
+```bash
+systemctl status orches
+systemctl status caddy
+status podman exec systemd-orches orches status
+curl localhost:8080
+```
+
+### Customizing your deployment
+
