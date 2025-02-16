@@ -1,0 +1,42 @@
+package git
+
+// Taken from https://github.com/go-git/go-git/blob/6b34aace4af044a6a570a17ecf96db725de2328a/internal/url/url.go#L37
+// Original license: Apache-2.0
+
+import (
+	"regexp"
+)
+
+var (
+	isSchemeRegExp = regexp.MustCompile(`^[^:]+://`)
+
+	// Ref: https://github.com/git/git/blob/master/Documentation/urls.txt#L37
+	scpLikeUrlRegExp = regexp.MustCompile(`^(?:(?P<user>[^@]+)@)?(?P<host>[^:\s]+):(?:(?P<port>[0-9]{1,5}):)?(?P<path>[^\\].*)$`)
+)
+
+// MatchesScheme returns true if the given string matches a URL-like
+// format scheme.
+func MatchesScheme(url string) bool {
+	return isSchemeRegExp.MatchString(url)
+}
+
+// MatchesScpLike returns true if the given string matches an SCP-like
+// format scheme.
+func MatchesScpLike(url string) bool {
+	return scpLikeUrlRegExp.MatchString(url)
+}
+
+// FindScpLikeComponents returns the user, host, port and path of the
+// given SCP-like URL.
+func FindScpLikeComponents(url string) (user, host, port, path string) {
+	m := scpLikeUrlRegExp.FindStringSubmatch(url)
+	return m[1], m[2], m[3], m[4]
+}
+
+// IsLocalEndpoint returns true if the given URL string specifies a
+// local file endpoint.  For example, on a Linux machine,
+// `/home/user/src/go-git` would match as a local endpoint, but
+// `https://github.com/src-d/go-git` would not.
+func IsLocalEndpoint(url string) bool {
+	return !MatchesScheme(url) && !MatchesScpLike(url)
+}

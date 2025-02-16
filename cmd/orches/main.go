@@ -217,10 +217,15 @@ func main() {
 		Short: "Switch to a different deployment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// absolute path is important for the daemon
-			p, err := filepath.Abs(args[0])
-			if err != nil {
-				return fmt.Errorf("failed to get absolute path: %w", err)
+			p := args[0]
+
+			if git.IsLocalEndpoint(p) {
+				var err error
+				// absolute path is important for the daemon
+				p, err = filepath.Abs(p)
+				if err != nil {
+					return fmt.Errorf("failed to get absolute path: %w", err)
+				}
 			}
 
 			dc := daemonCommand{Name: "switch", Arg: p}
