@@ -3,7 +3,7 @@ module github.com/orches-team/orches
 go 1.23.5
 
 require (
-	github.com/spf13/cobra v1.9.0
+	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
 )
 
