@@ -23,6 +23,12 @@ orches is not limited to Podman containers, but it is also able to manage generi
 ## Quick Start
 orches can run both rootless and rootful. While running rootless offers stronger security, some applications cannot be run in such a setup. We provide sample configuration for both modes. If you are not sure which one to pick, start with rootless, it's simple to switch to rootful later if you need to.
 
+In order to run orches, you need:
+- podman >= 4.4
+- systemd
+
+orches has been tested on Fedora 41, Ubuntu 24.04, and CentOS Stream 9 and its derivates
+
 ### Initializing orches with a rootless config
 To start using rootless orches, simply run the following commands:
 
@@ -113,7 +119,7 @@ You should now be able to navigate to http://localhost:8096 and see your new Jel
 ### Wrapping it up
 Now that you know how to deploy new containers, it's also time to learn how to modify, or remove existing ones.
 
-Firstly, let's 
+Firstly, let's
 
 ```diff
   [Container]
