@@ -21,14 +21,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-user-static
+
       - name: Build
         run: |
-          podman build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
-          podman build -t ghcr.io/${{ github.repository }}:latest .
+          podman build --platform=linux/amd64,linux/arm64 --jobs=4 -t orches .
 
       - name: Push
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u $ --password-stdin
-          podman push ghcr.io/${{ github.repository }}:${{ github.sha }}
-          podman push ghcr.io/${{ github.repository }}:latest
+          podman manifest push --all --format v2s2 orches ghcr.io/${{ github.repository }}:${{ github.sha }}
+          podman manifest push --all --format v2s2 orches ghcr.io/${{ github.repository }}:latest
