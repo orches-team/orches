@@ -28,7 +28,7 @@ jobs:
 
       - name: Build
         run: |
-          podman build --platform=linux/amd64,linux/arm64 --jobs=4 -t orches .
+          podman build --platform=linux/amd64,linux/arm64 --jobs=4 --manifest orches .
 
       - name: Push
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
