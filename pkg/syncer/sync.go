@@ -122,6 +122,10 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 		return nil, fmt.Errorf("failed to create directories: %w", err)
 	}
 
+	if err := s.DisableUnits(removed); err != nil {
+		return nil, fmt.Errorf("failed to disable unit: %w", err)
+	}
+
 	if err := s.StopUnits(toStop); err != nil {
 		return nil, fmt.Errorf("failed to stop unit: %w", err)
 	}
@@ -144,6 +148,10 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 
 	if err := s.StartUnits(append(added, toRestart...)); err != nil {
 		return nil, fmt.Errorf("failed to start unit: %w", err)
+	}
+
+	if err := s.EnableUnits(added); err != nil {
+		return nil, fmt.Errorf("failed to enable unit: %w", err)
 	}
 
 	return &SyncResult{RestartNeeded: restartNeeded}, nil

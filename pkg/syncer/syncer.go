@@ -16,15 +16,23 @@ type Syncer struct {
 	User bool
 }
 
-func (s *Syncer) CreateDirs() error {
-	if _, err := os.Stat(unit.ContainerDir(s.User)); err == nil {
-		s.dryPrint("Directory exists", unit.ContainerDir(s.User))
+func (s *Syncer) createDir(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		s.dryPrint("Directory exists", dir)
 		return nil
 	}
 
-	s.dryPrint("Create", unit.ContainerDir(s.User))
+	s.dryPrint("Create", dir)
 
-	return os.MkdirAll(unit.ContainerDir(s.User), 0755)
+	return os.MkdirAll(dir, 0755)
+}
+
+func (s *Syncer) CreateDirs() error {
+	var errs []error
+	for _, dir := range []string{unit.ContainerDir(s.User), unit.ServiceDir(s.User)} {
+		errs = append(errs, s.createDir(dir))
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Syncer) Remove(units []unit.Unit) error {
@@ -51,6 +59,22 @@ func (s *Syncer) StartUnits(units []unit.Unit) error {
 
 func (s *Syncer) RestartUnits(units []unit.Unit) error {
 	return s.transitionUnits("try-restart", units)
+}
+
+func (s *Syncer) EnableUnits(units []unit.Unit) error {
+	filtered := utils.FilterSlice(units, func(u unit.Unit) bool { return u.CanBeEnabled() })
+	if len(filtered) == 0 {
+		return nil
+	}
+	return s.transitionUnits("enable", filtered)
+}
+
+func (s *Syncer) DisableUnits(units []unit.Unit) error {
+	filtered := utils.FilterSlice(units, func(u unit.Unit) bool { return u.CanBeEnabled() })
+	if len(filtered) == 0 {
+		return nil
+	}
+	return s.transitionUnits("disable", filtered)
 }
 
 func (s *Syncer) Add(srcDir string, units []unit.Unit) error {

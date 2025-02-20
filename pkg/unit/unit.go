@@ -27,10 +27,22 @@ func ContainerDir(user bool) string {
 	return "/etc/containers/systemd"
 }
 
+func ServiceDir(user bool) string {
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return "/etc/systemd/system"
+	}
+	if user {
+		return path.Join(homeDir, ".config", "systemd", "user")
+	}
+	return "/etc/systemd/system"
+}
+
 type UnitType int
 
 const (
 	UnitTypeContainer UnitType = iota
+	UnitTypeNetwork
+	UnitTypeService
 )
 
 type unit struct {
@@ -43,6 +55,7 @@ type Unit interface {
 	SystemctlName() string
 	Path(user bool) string
 	EqualContent(Unit) bool
+	CanBeEnabled() bool
 }
 
 type ErrUnknownUnitType struct {
@@ -79,6 +92,10 @@ func (u *unit) innerTyp(name string) *UnitType {
 	switch true {
 	case path.Ext(name) == ".container":
 		typ = UnitTypeContainer
+	case path.Ext(name) == ".network":
+		typ = UnitTypeNetwork
+	case path.Ext(name) == ".service":
+		typ = UnitTypeService
 	default:
 		return nil
 	}
@@ -94,6 +111,10 @@ func (u *unit) SystemctlName() string {
 	switch u.Typ() {
 	case UnitTypeContainer:
 		return u.name[:len(u.name)-len(".container")] + ".service"
+	case UnitTypeNetwork:
+		return u.name[:len(u.name)-len(".network")] + "-network.service"
+	case UnitTypeService:
+		return u.name
 	default:
 		panic("unknown unit type: " + u.name)
 	}
@@ -102,7 +123,11 @@ func (u *unit) SystemctlName() string {
 func (u *unit) Path(user bool) string {
 	switch u.Typ() {
 	case UnitTypeContainer:
+		fallthrough
+	case UnitTypeNetwork:
 		return path.Join(ContainerDir(user), u.name)
+	case UnitTypeService:
+		return path.Join(ServiceDir(user), u.name)
 	default:
 		panic("unknown unit type: " + u.name)
 	}
@@ -110,4 +135,8 @@ func (u *unit) Path(user bool) string {
 
 func (u *unit) EqualContent(other Unit) bool {
 	return u.content == other.(*unit).content
+}
+
+func (u *unit) CanBeEnabled() bool {
+	return u.Typ() == UnitTypeService
 }
