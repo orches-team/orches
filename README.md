@@ -86,8 +86,47 @@ curl localhost:8080
 ```
 
 ### Customizing your deployment
-You now have orches and up and running. Let's add an actually useful application to the deployment. Firstly, you need to fork the template repository ([rootless](https://github.com/orches-team/orches-config-rootless), [rootful](https://github.com/orches-team/orches-config-rootful)) that you started with in the previous step.
+You now have orches and up and running. Let's add an actually useful application, a [Jellyfin media server](https://jellyfin.org/), to the deployment. Firstly, you need to fork the template repository ([rootless](https://github.com/orches-team/orches-config-rootless), [rootful](https://github.com/orches-team/orches-config-rootful)) that you started with in the previous step.
 
-Once you have fork set up, clone it locally, and add the following file as `jellyfin.service`:
+Once you have your fork created, clone it locally, and add the following file as `jellyfin.service`:
 
+```ini
+[Container]
+Image=docker.io/jellyfin/jellyfin
+Volume=config:/config:Z
+Volume=cache:/cache:Z
+Volume=media:/media:Z
+PublishPort=8096:8096
+
+[Install]
+WantedBy=multi-user.target default.target
+```
+
+Commit the file, and push to your fork. Now, it's time to tell orches to use your fork instead of the sample repository. Run the following command on your host running orches:
+
+```bash
+podman exec systemd-orches orches switch ${YOUR_FORK_URL}
+```
+
+You should now be able to navigate to http://localhost:8096 and see your new Jellyfin instance.
+
+### Wrapping it up
+Now that you know how to deploy new containers, it's also time to learn how to modify, or remove existing ones.
+
+Firstly, let's 
+
+```diff
+  [Container]
+  Image=docker.io/jellyfin/jellyfin
+  Volume=config:/config:Z
+  Volume=cache:/cache:Z
+  Volume=media:/media:Z
+  PublishPort=8096:8096
+
++ [Service]
++ Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target default.target
+```
 
