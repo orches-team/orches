@@ -86,4 +86,8 @@ curl localhost:8080
 ```
 
 ### Customizing your deployment
+You now have orches and up and running. Let's add an actually useful application to the deployment. Firstly, you need to fork the template repository ([rootless](https://github.com/orches-team/orches-config-rootless), [rootful](https://github.com/orches-team/orches-config-rootful)) that you started with in the previous step.
+
+Once you have fork set up, clone it locally, and add the following file as `jellyfin.service`:
+
 
