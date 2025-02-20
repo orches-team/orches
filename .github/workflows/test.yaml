@@ -1,14 +1,13 @@
 name: Run tests
-on: [push]
 
-# on:
-#   pull_request:
-#     branches:
-#       - "*"
-#   merge_group:
+on:
+  pull_request:
+    branches:
+      - "*"
+  merge_group:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
     steps:
