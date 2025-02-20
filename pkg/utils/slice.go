@@ -22,3 +22,13 @@ func MapSlice[T any, U any](slice []T, f func(T) U) []U {
 	}
 	return result
 }
+
+func FilterSlice[T any](slice []T, f func(T) bool) []T {
+	result := []T{}
+	for _, s := range slice {
+		if f(s) {
+			result = append(result, s)
+		}
+	}
+	return result
+}
