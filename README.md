@@ -4,6 +4,14 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+Content:
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [CLI documentation](#cli-documentation)
+- [Supported units](#supported-units)
+- [FAQ](#faq)
+
 ## Overview
 
 orches is a simple git-ops tool for orchestrating [Podman](https://podman.io/) containers and systemd units on a single machine. It is loosely inspired by [Argo CD](https://argo-cd.readthedocs.io/en/stable/) and [Flux CD](https://fluxcd.io/), but without the need for Kubernetes.
@@ -124,7 +132,7 @@ podman exec systemd-orches orches switch ${YOUR_FORK_URL}
 
 You should now be able to navigate to <http://localhost:8096> and see your new Jellyfin instance.
 
-### Wrapping it up
+### Updating your deployment
 
 Now that you know how to deploy new containers, it's also time to learn how to modify, or remove existing ones.
 
@@ -208,4 +216,36 @@ Prints orches version and some details about its build. The output format is yam
 
 ## Supported units
 
+Orches supports the following unit types:
 
+| File extension | Description                                                                                                             |
+|----------------|-------------------------------------------------------------------------------------------------------------------------|
+| `.container`   | Podman [container unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#container-units-container) |
+| `.network`     | Podman [network unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#network-units-network)       |
+| `.service`     | Ordinary [systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)                |
+
+
+orches only process units in the top level directory of the repository. All directories in the repository are currently ignored.
+
+Additionally, all units with unknown extensions are ignored. You can use this to your advantage. Simply rename `web.container` to `web.container.ignored`, and orches will remove this container during the next sync.
+
+Podman units [cannot be enabled](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#enabling-unit-files), orches only runs start/stop/try-restart one them. Plain systemd service units are also enabled, or disabled.
+
+Units are restarted when a change in them is detected. The algorithm is naive, it just compares the old file, and the new one byte by byte.
+
+## FAQ
+
+This is a list of practical Frequently Asked Questions about running orches.
+
+### Can I use a private repository?
+
+Certainly! It's recommended to start with a public fork of one of the starter repositories. Make sure that your are using the SSH remote path when running `switch`. Once you have your deployment switched, copy an unencrypted private ssh key to the server and add a volume to your `orches.container`:
+
+```ini
+Volume=PATH_TO_YOUR_SSH_KEY:%h/.ssh/id_rsa
+```
+
+Now sync your deployment, make your fork private, and sync it again to verify that orches can still pull from the repository.
+
+
+### Can I also manage configuration files for my containers using orches?
