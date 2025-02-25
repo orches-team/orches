@@ -1,8 +1,11 @@
 ![orches logo](https://raw.githubusercontent.com/orches-team/common/main/orches-logo-text.svg)
+
 # orches: Simple git-ops for Podman and systemd
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Overview
+
 orches is a simple git-ops tool for orchestrating [Podman](https://podman.io/) containers and systemd units on a single machine. It is loosely inspired by [Argo CD](https://argo-cd.readthedocs.io/en/stable/) and [Flux CD](https://fluxcd.io/), but without the need for Kubernetes.
 
 Containers in orches are defined by [Podman Quadlets](https://www.redhat.com/en/blog/quadlet-podman). A super simple example of such a file can look like this:
@@ -21,15 +24,18 @@ All you need to start using orches is to create a repository, include this file,
 orches is not limited to Podman containers, but it is also able to manage generic systemd units. This makes it a great pick for managing both containerized, and non-containerized workloads. orches is able to run both system and [user](https://wiki.archlinux.org/title/Systemd/User) systemd units.
 
 ## Quick Start
+
 orches can run both rootless and rootful. While running rootless offers stronger security, some applications cannot be run in such a setup. We provide sample configuration for both modes. If you are not sure which one to pick, start with rootless, it's simple to switch to rootful later if you need to.
 
 In order to run orches, you need:
+
 - podman >= 4.4
 - systemd
 
 orches has been tested on Fedora 41, Ubuntu 24.04, and CentOS Stream 9 and its derivates
 
 ### Initializing orches with a rootless config
+
 To start using rootless orches, simply run the following commands:
 
 ```bash
@@ -63,6 +69,7 @@ curl localhost:8080
 ```
 
 ### Initializing orches with a rootful config
+
 To start using rootful orches, simply run the following commands:
 
 ```bash
@@ -92,6 +99,7 @@ curl localhost:8080
 ```
 
 ### Customizing your deployment
+
 You now have orches and up and running. Let's add an actually useful application, a [Jellyfin media server](https://jellyfin.org/), to the deployment. Firstly, you need to fork the template repository ([rootless](https://github.com/orches-team/orches-config-rootless), [rootful](https://github.com/orches-team/orches-config-rootful)) that you started with in the previous step.
 
 Once you have your fork created, clone it locally, and add the following file as `jellyfin.service`:
@@ -114,12 +122,13 @@ Commit the file, and push to your fork. Now, it's time to tell orches to use you
 podman exec systemd-orches orches switch ${YOUR_FORK_URL}
 ```
 
-You should now be able to navigate to http://localhost:8096 and see your new Jellyfin instance.
+You should now be able to navigate to <http://localhost:8096> and see your new Jellyfin instance.
 
 ### Wrapping it up
+
 Now that you know how to deploy new containers, it's also time to learn how to modify, or remove existing ones.
 
-Firstly, let's
+Firstly, let's modify the Jellyfin one to automatically restart itself if it fails:
 
 ```diff
   [Container]
@@ -135,4 +144,68 @@ Firstly, let's
   [Install]
   WantedBy=multi-user.target default.target
 ```
+
+Secondly, delete the sample webserver (`caddy.container`) from the repository. Now, commit all changes, and push them to your remote repository.
+
+orches checks for changes and applies them every 2 minutes. If you are impatient, you can trigger a sync manually with `podman exec systemd-orches orches sync`. After either 2 minutes, or a manual sync, you should see the jellyfin service restarted, and the caddy service removed. You can check this with:
+
+```bash
+systemctl status jellyfin
+systemctl status caddy
+```
+
+### Removing orches
+
+If you want to remove orches altogether, just run:
+
+```bash
+podman exec systemd-orches orches prune
+```
+
+## CLI documentation
+
+This section describes orches CLI and all its flags and subcommands.
+
+### Global flags
+
+| Flag        | Description                                                                           |
+|-------------|---------------------------------------------------------------------------------------|
+| `--dry`     | Instructs orches to just print what it would do, but no changes are actually applied. |
+| `--verbose` | Turns on verbose logging.                                                             |
+
+
+### `orches init REF`
+
+Initializes orches from the given `REF`. `REF` accepts the same formats as `git clone` does.
+
+### `orches switch REF`
+
+Switches orches to deploy from `REF` instead of its current target. `REF` accepts the same formats as `git clone` does.
+
+### `orches sync`
+
+Instructs orches to check for changes in the target repository, and apply them.
+
+### `orches run`
+
+Starts orches as a daemon. This basically runs `orches sync` every 2 minutes. Send SIGINT (ctrl+C), or SIGTERM to stop.
+
+Flags:
+
+| Flag         | Default | Description                                |
+|--------------|---------|--------------------------------------------|
+| `--interval` | 120     | How often the sync is performed in seconds |
+
+
+### `orches status`
+
+Prints information about the current target and the deployed commit. The output format is yaml.
+
+
+### `orches version`
+
+Prints orches version and some details about its build. The output format is yaml.
+
+## Supported units
+
 
