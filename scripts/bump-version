@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import re
+import subprocess
+
+
+def get_version():
+    """Get current version from main.go."""
+    with open("cmd/orches/main.go", "r") as f:
+        content = f.read()
+        match = re.search(r'const version = "([^"]+)"', content)
+        if not match:
+            raise ValueError("Version not found in main.go")
+        return match.group(1)
+
+
+def parse_version(version):
+    """Parse version string into (major, minor, patch) tuple."""
+    base_version = version.removesuffix("-dev")
+    try:
+        major, minor, patch = map(int, base_version.split("."))
+        return major, minor, patch
+    except ValueError:
+        raise ValueError(f"Invalid version format: {version}")
+
+
+def bump_version(major, minor, patch, is_minor):
+    """Bump version and return (release_version, next_dev_version)."""
+    if is_minor:
+        minor += 1
+        patch = 0
+    else:
+        patch += 1
+
+    release_version = f"{major}.{minor}.{patch}"
+    next_dev_version = f"{release_version}-dev"
+    return release_version, next_dev_version
+
+
+def update_version(new_version):
+    """Update version in main.go."""
+    with open("cmd/orches/main.go", "r") as f:
+        content = f.read()
+
+    new_content = re.sub(
+        r'const version = "[^"]+"',
+        f'const version = "{new_version}"',
+        content,
+        count=1,
+    )
+
+    with open("cmd/orches/main.go", "w") as f:
+        f.write(new_content)
+
+
+def git_commit(version, is_dev):
+    """Create a git commit with the version change."""
+    subprocess.run(["git", "add", "cmd/orches/main.go"], check=True)
+
+    msg = f"chore: bump version to {version}" if is_dev else f"release: version {version}"
+    subprocess.run(["git", "commit", "-m", msg], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bump version number in orches")
+    parser.add_argument(
+        "--minor",
+        action="store_true",
+        help="Bump minor version instead of patch version",
+    )
+    args = parser.parse_args()
+
+    # Ensure we're in the project root
+    if not os.path.exists("cmd/orches/main.go"):
+        raise ValueError("Must be run from project root")
+
+    # Get and parse current version
+    current = get_version()
+    print(f"Current version: {current}")
+    major, minor, patch = parse_version(current)
+
+    # Calculate new versions
+    release_version, next_dev_version = bump_version(major, minor, patch, args.minor)
+
+    # Create release commit
+    update_version(release_version)
+    git_commit(release_version, is_dev=False)
+    print(f"Created release version: {release_version}")
+
+    # Create development commit
+    update_version(next_dev_version)
+    git_commit(next_dev_version, is_dev=True)
+    print(f"Bumped to development version: {next_dev_version}")
+
+
+if __name__ == "__main__":
+    main()
