@@ -600,32 +600,14 @@ func doPrune(dryRun bool) error {
 
 func cmdSwitch(remote string, flags rootFlags) error {
 	return lock(func() error {
-		repoDir := path.Join(baseDir, "repo")
-
-		newRepo, err := os.MkdirTemp(baseDir, "orches-switch-")
-		if err != nil {
-			return fmt.Errorf("failed to create temporary directory: %w", err)
+		// First prune the existing deployment
+		if err := doPrune(flags.dryRun); err != nil {
+			return fmt.Errorf("failed to prune existing deployment: %w", err)
 		}
 
-		if _, err := git.Clone(remote, newRepo); err != nil {
-			return fmt.Errorf("failed to clone repo: %w", err)
-		}
-		defer os.RemoveAll(newRepo)
-
-		if _, err := syncer.SyncDirs(repoDir, newRepo, flags.dryRun); err != nil {
-			return fmt.Errorf("failed to sync directories: %w", err)
-		}
-
-		if flags.dryRun {
-			return nil
-		}
-
-		if err := os.RemoveAll(repoDir); err != nil {
-			return fmt.Errorf("failed to remove directory: %w", err)
-		}
-
-		if err := os.Rename(newRepo, repoDir); err != nil {
-			return fmt.Errorf("failed to rename directory: %w", err)
+		// Then initialize with the new remote
+		if err := doInit(remote, flags.dryRun); err != nil {
+			return fmt.Errorf("failed to initialize new deployment: %w", err)
 		}
 
 		return nil
