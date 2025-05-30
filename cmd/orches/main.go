@@ -317,7 +317,7 @@ func main() {
 					case c := <-cmdChan:
 						switch c.Name {
 						case "sync":
-							_, err := cmdSync(getRootFlags(cmd))
+							res, err := cmdSync(getRootFlags(cmd))
 							if err != nil {
 								statusChan <- fmt.Sprintf("%v", err)
 								fmt.Fprintf(os.Stderr, "Remote sync command failed: %v\n", err)
