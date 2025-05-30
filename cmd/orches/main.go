@@ -346,7 +346,8 @@ func main() {
 								fmt.Fprintf(os.Stderr, "Remote switch (%s) command failed: %v\n", c.Arg, err)
 							} else {
 								statusChan <- fmt.Sprintf("Switched to %s", c.Arg)
-								fmt.Fprintf(os.Stderr, "Remote switch (%s) command successfully processed.\n", c.Arg)
+								fmt.Fprintf(os.Stderr, "Remote switch (%s) command successfully processed, exiting.\n", c.Arg)
+								return nil
 							}
 						case "status":
 							res, err := cmdStatus()
