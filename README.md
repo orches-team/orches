@@ -271,7 +271,7 @@ Volume=%h/.config/orches/repo/Caddyfile:/etc/caddy/Caddyfile:z
 X-Version=1
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target default.target
 ```
 
 **Rootful Example (`/var/lib/orches/repo`):**
@@ -282,7 +282,7 @@ Volume=/var/lib/orches/repo/Caddyfile:/etc/caddy/Caddyfile:z
 X-Version=1
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target default.target
 ```
 
 When you update a configuration file in your repository, increment the `X-Version` value in the corresponding container unit file. This ensures orches restarts the container with the new configuration during the next sync.
