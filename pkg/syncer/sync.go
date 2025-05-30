@@ -7,28 +7,39 @@ import (
 	"os"
 	"slices"
 
+	// "github.com/orches-team/orches/pkg/git" // No longer needed here
 	"github.com/orches-team/orches/pkg/unit"
 	"github.com/orches-team/orches/pkg/utils"
 )
+
+// PostSyncAction defines a function to be called after units are on disk and daemon reloaded,
+// but before services are (re)started. It's responsible for finalizing any underlying
+// state (like a git repository reset or directory removal) and should handle dryRun appropriately.
+type PostSyncAction func(dryRun bool) error
 
 type SyncResult struct {
 	RestartNeeded bool
 }
 
-func SyncDirs(old, new string, dryRun bool) (*SyncResult, error) {
-	oldUnits, err := listUnits(old)
+func SyncDirs(
+	oldWorktreePath string,
+	newWorktreePath string,
+	dryRun bool,
+	postSyncAction PostSyncAction,
+) (*SyncResult, error) {
+	oldUnits, err := listUnits(oldWorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list old files: %w", err)
 	}
 
-	newUnits, err := listUnits(new)
+	newUnits, err := listUnits(newWorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list new files: %w", err)
 	}
 
 	added, removed, modified := diffUnits(oldUnits, newUnits)
 
-	res, err := processChanges(new, added, removed, modified, dryRun)
+	res, err := processChanges(newWorktreePath, added, removed, modified, dryRun, postSyncAction)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process changes: %w", err)
 	}
@@ -81,9 +92,20 @@ func diffUnits(old, new map[string]unit.Unit) (added, removed, changed []unit.Un
 	return
 }
 
-func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun bool) (*SyncResult, error) {
+func processChanges(
+	newDir string, // This is newWorktreePath
+	added, removed, modified []unit.Unit,
+	dryRun bool,
+	postSyncAction PostSyncAction,
+) (*SyncResult, error) {
 	if len(added) == 0 && len(removed) == 0 && len(modified) == 0 {
 		fmt.Fprintf(os.Stderr, "No changes to process.")
+		// Execute postSyncAction even if no unit changes, as the underlying repo might have changed.
+		if postSyncAction != nil {
+			if err := postSyncAction(dryRun); err != nil {
+				return nil, fmt.Errorf("post sync action failed even with no unit changes: %w", err)
+			}
+		}
 		return &SyncResult{}, nil
 	}
 
@@ -140,6 +162,17 @@ func processChanges(newDir string, added, removed, modified []unit.Unit, dryRun 
 
 	if err := s.ReloadDaemon(); err != nil {
 		return nil, fmt.Errorf("failed to reload daemon: %w", err)
+	}
+
+	// Perform the post-sync action (e.g., git reset, directory removal)
+	if postSyncAction != nil {
+		slog.Info("Executing post-sync action")
+		if err := postSyncAction(s.Dry); err != nil { // Pass syncer's dryRun state
+			return nil, fmt.Errorf("post-sync action failed: %w", err)
+		}
+		slog.Info("Post-sync action completed successfully")
+	} else {
+		slog.Info("No post-sync action provided")
 	}
 
 	if err := s.RestartUnits(toRestart); err != nil {

@@ -484,7 +484,7 @@ func doInit(remote string, dryRun bool) error {
 	}
 	defer os.RemoveAll(blank)
 
-	if _, err := syncer.SyncDirs(blank, repoPath, dryRun); err != nil {
+	if _, err := syncer.SyncDirs(blank, repoPath, dryRun, nil); err != nil {
 		return fmt.Errorf("failed to sync directories: %w", err)
 	}
 
@@ -504,61 +504,64 @@ func cmdSync(flags rootFlags) (*syncer.SyncResult, error) {
 
 	err := lock(func() error {
 		repoDir := filepath.Join(baseDir, "repo")
-
 		repo := git.Repo{Path: repoDir}
-		oldState, err := repo.NewWorktree("HEAD")
+
+		currentLocalRef, err := repo.Ref("HEAD")
 		if err != nil {
-			return fmt.Errorf("failed to create worktree: %w", err)
+			return fmt.Errorf("failed to get current HEAD ref: %w", err)
 		}
-		defer oldState.Cleanup()
 
-		beforeRef, err := repo.Ref("HEAD")
+		fmt.Fprintf(os.Stderr, "Fetching from origin\n")
+		if err := repo.Fetch("origin"); err != nil {
+			return fmt.Errorf("failed to fetch from origin: %w", err)
+		}
+
+		remoteUpstreamRef, err := repo.Ref("@{u}")
 		if err != nil {
-			return fmt.Errorf("failed to get ref: %w", err)
+			return fmt.Errorf("failed to get upstream ref (@{u}): %w. Ensure your current branch is tracking an upstream branch", err)
 		}
 
-		remoteURL, err := repo.RemoteURL("origin")
-		if err != nil {
-			return fmt.Errorf("failed to get remote URL: %w", err)
+		syncPostSyncAction := func(isDryRun bool) error {
+			if !isDryRun {
+				slog.Info("PostSyncAction(cmdSync): Resetting repository", "ref", remoteUpstreamRef)
+				if err := repo.Reset(remoteUpstreamRef); err != nil {
+					return fmt.Errorf("failed to reset repository to %s: %w", remoteUpstreamRef, err)
+				}
+				fmt.Fprintf(os.Stderr, "Repository reset to %s\n", remoteUpstreamRef)
+			} else {
+				fmt.Fprintf(os.Stderr, "PostSyncAction(cmdSync): Dry run, repository would have been reset to %s\n", remoteUpstreamRef)
+			}
+			return nil
 		}
 
-		fmt.Fprintf(os.Stderr, "Syncing from %s\n", remoteURL)
-
-		if err := repo.Pull(); err != nil {
-			return fmt.Errorf("failed to pull repo: %w", err)
-		}
-
-		afterRef, err := repo.Ref("HEAD")
-		if err != nil {
-			return fmt.Errorf("failed to get ref: %w", err)
-		}
-
-		if beforeRef == afterRef {
+		if currentLocalRef == remoteUpstreamRef {
 			fmt.Fprintln(os.Stderr, "No new commits to sync.")
 			return nil
 		}
 
-		newState, err := repo.NewWorktree("HEAD")
+		fmt.Fprintf(os.Stderr, "Current HEAD is %s, targeting %s\n", currentLocalRef, remoteUpstreamRef)
+
+		oldState, err := repo.NewWorktree(currentLocalRef)
 		if err != nil {
-			return fmt.Errorf("failed to create worktree: %w", err)
+			return fmt.Errorf("failed to create worktree for current state: %w", err)
+		}
+		defer oldState.Cleanup()
+
+		newState, err := repo.NewWorktree(remoteUpstreamRef)
+		if err != nil {
+			return fmt.Errorf("failed to create worktree for new state: %w", err)
 		}
 		defer newState.Cleanup()
 
-		fmt.Fprintf(os.Stderr, "Syncing %s..%s\n", beforeRef, afterRef)
+		fmt.Fprintf(os.Stderr, "Syncing changes between %s and %s\n", currentLocalRef, remoteUpstreamRef)
 
-		if flags.dryRun {
-			if err := repo.Reset(beforeRef); err != nil {
-				return fmt.Errorf("dry run error: failed to reset repo: %w", err)
-			}
-		}
-
-		res, err = syncer.SyncDirs(oldState.Path, newState.Path, flags.dryRun)
-
+		res, err = syncer.SyncDirs(oldState.Path, newState.Path, flags.dryRun, syncPostSyncAction)
 		if err != nil {
+			slog.Error("Sync process failed", "error", err, "current_ref", currentLocalRef)
 			return fmt.Errorf("failed to sync directories: %w", err)
 		}
 
-		fmt.Fprintf(os.Stderr, "Synced to %s\n", afterRef)
+		fmt.Fprintf(os.Stderr, "Synced to %s\n", remoteUpstreamRef)
 		return nil
 	})
 	return res, err
@@ -582,17 +585,21 @@ func doPrune(dryRun bool) error {
 	}
 	defer os.RemoveAll(blank)
 
-	if _, err := syncer.SyncDirs(repoDir, blank, dryRun); err != nil {
-		return fmt.Errorf("failed to sync directories: %w", err)
-	}
-
-	if dryRun {
-		fmt.Fprintf(os.Stderr, "Remove %s\n", repoDir)
+	prunePostSyncAction := func(isDryRun bool) error {
+		if !isDryRun {
+			slog.Info("PostSyncAction(doPrune): Removing repository directory", "path", repoDir)
+			if err := os.RemoveAll(repoDir); err != nil {
+				return fmt.Errorf("failed to remove repository directory %s: %w", repoDir, err)
+			}
+			fmt.Fprintf(os.Stderr, "Repository pruned from %s\n", repoDir)
+		} else {
+			fmt.Fprintf(os.Stderr, "PostSyncAction(doPrune): Dry run, would remove repository directory %s\n", repoDir)
+		}
 		return nil
 	}
 
-	if err := os.RemoveAll(repoDir); err != nil {
-		return fmt.Errorf("failed to remove directory: %w", err)
+	if _, err := syncer.SyncDirs(repoDir, blank, dryRun, prunePostSyncAction); err != nil {
+		return fmt.Errorf("failed to sync directories for prune: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Repository pruned\n")
