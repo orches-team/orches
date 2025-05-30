@@ -305,3 +305,81 @@ PublishPort=9090:80
 	out = runOrches(t, "status")
 	assert.Contains(t, string(out), testdir2)
 }
+
+func TestOrchesRun(t *testing.T) {
+	defer cleanup(t)
+
+	// Create initial repo
+	run(t, "mkdir", "-p", testdir)
+	run(t, "git", "-C", testdir, "init")
+
+	// Add initial caddy container on 8080
+	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=8080:80
+`)
+
+	runOrches(t, "init", testdir)
+
+	// Verify initial state
+	out := run(t, "systemctl", "status", "caddy")
+	assert.Contains(t, string(out), "Active: active (running)")
+	out = run(t, "curl", "-s", "http://localhost:8080")
+	assert.Contains(t, string(out), "Caddy")
+
+	// Start the run process
+	syncCmd := cmd("/app/orches", "-vv", "run", "--interval", "10")
+	cmd := exec.Command(syncCmd[0], syncCmd[1:]...)
+	require.NoError(t, cmd.Start())
+
+	// Give the daemon time to start
+	time.Sleep(2 * time.Second)
+
+	// Update caddy to use port 9090
+	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=9090:80
+`)
+
+	// Send sync command to daemon
+	runOrches(t, "sync")
+
+	// Give it time to process
+	time.Sleep(2 * time.Second)
+
+	// Verify the update was applied
+	out = run(t, "systemctl", "status", "caddy")
+	assert.Contains(t, string(out), "Active: active (running)")
+
+	// Old port should not work
+	_, err := runUnchecked("curl", "-s", "http://localhost:8080")
+	assert.Error(t, err)
+
+	// New port should work
+	out = run(t, "curl", "-s", "http://localhost:9090")
+	assert.Contains(t, string(out), "Caddy")
+
+	// Send prune command to daemon
+	runOrches(t, "prune")
+
+	// Give it time to process
+	time.Sleep(2 * time.Second)
+
+	// Verify prune worked
+	out, err = runUnchecked("systemctl", "status", "caddy")
+	assert.Error(t, err)
+	assert.Contains(t, string(out), "Unit caddy.service could not be found.")
+
+	_, err = runUnchecked("ls", "/etc/containers/systemd/caddy.container")
+	assert.Error(t, err)
+
+	_, err = runUnchecked("ls", "/var/lib/orches/repo")
+	assert.Error(t, err)
+
+	// Give orches time to exit
+	time.Sleep(1 * time.Second)
+
+	// Verify orches process exited after prune
+	err = cmd.Wait()
+	assert.NoError(t, err, "orches process should exit cleanly after prune")
+}
