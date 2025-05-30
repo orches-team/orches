@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,7 @@ func TestSmokePodman(t *testing.T) {
 }
 
 const testdir = "/orchestest"
+const testdir2 = "/orchestest2"
 
 func cleanup(t *testing.T) {
 	// ADD ALL UNITS USED IN TESTS HERE
@@ -113,22 +115,24 @@ func cleanup(t *testing.T) {
 	}
 
 	run(t, "rm", "-rf", testdir)
+	run(t, "rm", "-rf", testdir2)
 	run(t, "rm", "-rf", "/etc/containers/systemd")
+	run(t, "rm", "-rf", "/var/lib/orches")
 }
 
-func commit(t *testing.T) {
-	run(t, "git", "-C", testdir, "add", ".")
-	run(t, "git", "-C", testdir, "commit", "-m", "commit")
+func commit(t *testing.T, dir string) {
+	run(t, "git", "-C", dir, "add", ".")
+	run(t, "git", "-C", dir, "commit", "-m", "commit")
 }
 
-func addOrchesFile(t *testing.T, path, content string) {
+func addAndCommit(t *testing.T, path, content string) {
 	addFile(t, path, content)
-	commit(t)
+	commit(t, filepath.Dir(path))
 }
 
-func deleteOrchesFile(t *testing.T, path string) {
+func removeAndCommit(t *testing.T, path string) {
 	run(t, "rm", path)
-	commit(t)
+	commit(t, filepath.Dir(path))
 }
 
 func TestOrches(t *testing.T) {
@@ -138,7 +142,7 @@ func TestOrches(t *testing.T) {
 	run(t, "git", "-C", testdir, "init")
 
 	// Init with caddy on 8080
-	addOrchesFile(t, "/orchestest/caddy.container", `[Container]
+	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
 PublishPort=8080:80
 `)
@@ -154,7 +158,7 @@ PublishPort=8080:80
 	assert.Contains(t, string(out), "Caddy")
 
 	// Move caddy to 9090
-	addOrchesFile(t, "/orchestest/caddy.container", `[Container]
+	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
 PublishPort=9090:80
 `)
@@ -168,8 +172,8 @@ PublishPort=9090:80
 	assert.Contains(t, string(out), "Caddy")
 
 	// Drop caddy, and spawn it again as a different container on 8888
-	deleteOrchesFile(t, "/orchestest/caddy.container")
-	addOrchesFile(t, "/orchestest/caddy2.container", `[Container]
+	removeAndCommit(t, filepath.Join(testdir, "caddy.container"))
+	addAndCommit(t, filepath.Join(testdir, "caddy2.container"), `[Container]
 Image=docker.io/library/caddy:alpine
 PublishPort=8888:80
 `)
@@ -214,7 +218,7 @@ func TestOrchesSelfUpdate(t *testing.T) {
 	run(t, "git", "-C", testdir, "init")
 
 	// Let's mock orches with caddy
-	addOrchesFile(t, "/orchestest/orches.container", `[Container]
+	addAndCommit(t, filepath.Join(testdir, "orches.container"), `[Container]
 Image=docker.io/library/caddy:alpine
 PublishPort=8080:80
 `)
@@ -230,7 +234,7 @@ PublishPort=8080:80
 	require.NoError(t, cmd.Start())
 
 	// Fake an update
-	addOrchesFile(t, "/orchestest/orches.container", `[Container]
+	addAndCommit(t, filepath.Join(testdir, "orches.container"), `[Container]
 Image=docker.io/library/caddy:alpine
 PublishPort=9090:80
 `)
@@ -249,4 +253,55 @@ PublishPort=9090:80
 	// But the service file should have been updated
 	out = run(t, "cat", "/etc/containers/systemd/orches.container")
 	assert.Contains(t, string(out), "9090:80")
+}
+
+func TestOrchesSwitchRepo(t *testing.T) {
+	defer cleanup(t)
+
+	// Create first repo
+	run(t, "mkdir", "-p", testdir)
+	run(t, "git", "-C", testdir, "init")
+
+	// Add initial caddy container on 8080
+	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=8080:80
+`)
+
+	runOrches(t, "init", testdir)
+
+	// Verify initial state
+	out := run(t, "systemctl", "status", "caddy")
+	assert.Contains(t, string(out), "Active: active (running)")
+	out = run(t, "curl", "-s", "http://localhost:8080")
+	assert.Contains(t, string(out), "Caddy")
+
+	// Create second repo
+	run(t, "mkdir", "-p", testdir2)
+	run(t, "git", "-C", testdir2, "init")
+
+	// Add different caddy config in new repo
+	addAndCommit(t, filepath.Join(testdir2, "caddy.container"), `[Container]
+Image=docker.io/library/caddy:alpine
+PublishPort=9090:80
+`)
+
+	// Switch to new repo
+	runOrches(t, "switch", testdir2)
+
+	// Verify the switch worked
+	out = run(t, "systemctl", "status", "caddy")
+	assert.Contains(t, string(out), "Active: active (running)")
+
+	// Old port should not work
+	_, err := runUnchecked("curl", "-s", "http://localhost:8080")
+	assert.Error(t, err)
+
+	// New port should work
+	out = run(t, "curl", "-s", "http://localhost:9090")
+	assert.Contains(t, string(out), "Caddy")
+
+	// Verify repo status shows new path
+	out = runOrches(t, "status")
+	assert.Contains(t, string(out), testdir2)
 }
