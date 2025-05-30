@@ -189,10 +189,6 @@ This section describes orches CLI and all its flags and subcommands.
 
 Initializes orches from the given `REF`. `REF` accepts the same formats as `git clone` does.
 
-### `orches switch REF`
-
-Switches orches to deploy from `REF` instead of its current target. `REF` accepts the same formats as `git clone` does.
-
 ### `orches sync`
 
 Instructs orches to check for changes in the target repository, and apply them.
@@ -207,11 +203,17 @@ Flags:
 |--------------|---------|--------------------------------------------|
 | `--interval` | 120     | How often the sync is performed in seconds |
 
+### `orches switch REF`
+
+Switches orches to deploy from `REF` instead of its current target. `REF` accepts the same formats as `git clone` does.
+
+### `orches prune`
+
+Stops and removes all units managed by orches, and removes the local checkout of the repository - returning the system to a pristine state.
 
 ### `orches status`
 
 Prints information about the current target and the deployed commit. The output format is yaml.
-
 
 ### `orches version`
 
