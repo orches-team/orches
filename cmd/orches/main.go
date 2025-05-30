@@ -462,36 +462,40 @@ func lock(fn func() error) error {
 
 func initRepo(remote string, flags rootFlags) error {
 	return lock(func() error {
-		repoPath := filepath.Join(baseDir, "repo")
-
-		if _, err := os.Stat(repoPath); !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("repository already exists at %s", repoPath)
-		}
-
-		if _, err := git.Clone(remote, repoPath); err != nil {
-			return fmt.Errorf("failed to clone repo: %w", err)
-		}
-
-		blank, err := os.MkdirTemp("", "orches-initial-sync-")
-		if err != nil {
-			return fmt.Errorf("failed to create temporary directory: %w", err)
-		}
-		defer os.RemoveAll(blank)
-
-		if _, err := syncer.SyncDirs(blank, repoPath, flags.dryRun); err != nil {
-			return fmt.Errorf("failed to sync directories: %w", err)
-		}
-
-		if flags.dryRun {
-			if err := os.RemoveAll(baseDir); err != nil {
-				return fmt.Errorf("failed to remove directory: %w", err)
-			}
-			return nil
-		}
-
-		fmt.Fprintf(os.Stderr, "Initialized repo from %s\n", remote)
-		return nil
+		return doInit(remote, flags.dryRun)
 	})
+}
+
+func doInit(remote string, dryRun bool) error {
+	repoPath := filepath.Join(baseDir, "repo")
+
+	if _, err := os.Stat(repoPath); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("repository already exists at %s", repoPath)
+	}
+
+	if _, err := git.Clone(remote, repoPath); err != nil {
+		return fmt.Errorf("failed to clone repo: %w", err)
+	}
+
+	blank, err := os.MkdirTemp("", "orches-initial-sync-")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(blank)
+
+	if _, err := syncer.SyncDirs(blank, repoPath, dryRun); err != nil {
+		return fmt.Errorf("failed to sync directories: %w", err)
+	}
+
+	if dryRun {
+		if err := os.RemoveAll(baseDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Initialized repo from %s\n", remote)
+	return nil
 }
 
 func cmdSync(flags rootFlags) (*syncer.SyncResult, error) {
@@ -561,33 +565,37 @@ func cmdSync(flags rootFlags) (*syncer.SyncResult, error) {
 
 func cmdPrune(flags rootFlags) error {
 	return lock(func() error {
-		repoDir := filepath.Join(baseDir, "repo")
-		if _, err := os.Stat(repoDir); errors.Is(err, os.ErrNotExist) {
-			return errors.New("no repository to prune, orches not initialized")
-		}
-
-		blank, err := os.MkdirTemp("", "orches-prune-")
-		if err != nil {
-			return fmt.Errorf("failed to create temporary directory: %w", err)
-		}
-		defer os.RemoveAll(blank)
-
-		if _, err := syncer.SyncDirs(repoDir, blank, flags.dryRun); err != nil {
-			return fmt.Errorf("failed to sync directories: %w", err)
-		}
-
-		if flags.dryRun {
-			fmt.Fprintf(os.Stderr, "Remove %s\n", repoDir)
-			return nil
-		}
-
-		if err := os.RemoveAll(repoDir); err != nil {
-			return fmt.Errorf("failed to remove directory: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "Repository pruned\n")
-		return nil
+		return doPrune(flags.dryRun)
 	})
+}
+
+func doPrune(dryRun bool) error {
+	repoDir := filepath.Join(baseDir, "repo")
+	if _, err := os.Stat(repoDir); errors.Is(err, os.ErrNotExist) {
+		return errors.New("no repository to prune, orches not initialized")
+	}
+
+	blank, err := os.MkdirTemp("", "orches-prune-")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(blank)
+
+	if _, err := syncer.SyncDirs(repoDir, blank, dryRun); err != nil {
+		return fmt.Errorf("failed to sync directories: %w", err)
+	}
+
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "Remove %s\n", repoDir)
+		return nil
+	}
+
+	if err := os.RemoveAll(repoDir); err != nil {
+		return fmt.Errorf("failed to remove directory: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Repository pruned\n")
+	return nil
 }
 
 func cmdSwitch(remote string, flags rootFlags) error {
