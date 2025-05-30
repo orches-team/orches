@@ -21,8 +21,8 @@ func Clone(remote, path string) (*Repo, error) {
 	return &Repo{Path: path}, nil
 }
 
-func (r *Repo) Pull() error {
-	return utils.ExecNoOutput("git", "-C", r.Path, "pull")
+func (r *Repo) Fetch(remote string) error {
+	return utils.ExecNoOutput("git", "-C", r.Path, "fetch", remote)
 }
 
 func (r *Repo) Ref(ref string) (string, error) {
