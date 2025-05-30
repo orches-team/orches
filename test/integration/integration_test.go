@@ -276,6 +276,14 @@ PublishPort=8080:80
 	out = run(t, "curl", "-s", "http://localhost:8080")
 	assert.Contains(t, string(out), "Caddy")
 
+	// Start the run process
+	syncCmd := cmd("/app/orches", "-vv", "run", "--interval", "10")
+	cmd := exec.Command(syncCmd[0], syncCmd[1:]...)
+	require.NoError(t, cmd.Start())
+
+	// Give the daemon time to start
+	time.Sleep(2 * time.Second)
+
 	// Create second repo
 	run(t, "mkdir", "-p", testdir2)
 	run(t, "git", "-C", testdir2, "init")
@@ -289,12 +297,19 @@ PublishPort=9090:80
 	// Switch to new repo
 	runOrches(t, "switch", testdir2)
 
+	// Give the daemon time to exit
+	time.Sleep(1 * time.Second)
+
+	// Verify the daemon process exited
+	err := cmd.Wait()
+	assert.NoError(t, err, "orches process should exit cleanly after switch")
+
 	// Verify the switch worked
 	out = run(t, "systemctl", "status", "caddy")
 	assert.Contains(t, string(out), "Active: active (running)")
 
 	// Old port should not work
-	_, err := runUnchecked("curl", "-s", "http://localhost:8080")
+	_, err = runUnchecked("curl", "-s", "http://localhost:8080")
 	assert.Error(t, err)
 
 	// New port should work
