@@ -7,6 +7,7 @@
 Content:
 
 - [Overview](#overview)
+- [Project Status](#project-status)
 - [Quick Start](#quick-start)
 - [CLI documentation](#cli-documentation)
 - [Supported units](#supported-units)
@@ -30,6 +31,10 @@ WantedBy=multi-user.target
 All you need to start using orches is to create a repository, include this file, and run `orches init REPO_PATH` to sync your local system with the repository content.
 
 orches is not limited to Podman containers, but it is also able to manage generic systemd units. This makes it a great pick for managing both containerized, and non-containerized workloads. orches is able to run both system and [user](https://wiki.archlinux.org/title/Systemd/User) systemd units.
+
+## Project Status
+
+⚠️ **Project Maturity Warning**: orches is a young project that is currently being used on small production servers. While it is stable enough for basic production use, you may encounter rough edges.
 
 ## Quick Start
 
@@ -61,11 +66,10 @@ podman run --rm -it --userns=keep-id --pid=host --pull=newer \
   https://github.com/orches-team/orches-config-rootless.git
 ```
 
-These commands perform the following steps:
-
-1) Enabling [lingering](https://wiki.archlinux.org/title/Systemd/User#Automatic_start-up_of_systemd_user_instances) in order to launch orches and the apps it manages when the system boots.
-2) Creating directories that orches needs to run.
-3) Initializing orches by running its `init` subcommand. The extra flags given to `podman run` are needed so orches can control systemd user units. The last argument controls which repository is used for the initial deployment. In this case, the official rootless sample with orches and a dummy [caddy](https://caddyserver.com/) webserver is used.
+These commands:
+1. Enable [lingering](https://wiki.archlinux.org/title/Systemd/User#Automatic_start-up_of_systemd_user_instances) for orches and managed apps to start on boot.
+2. Create directories required by orches.
+3. Initialize orches via its `init` subcommand, using the official rootless sample repository (containing orches and a caddy webserver). The specified `podman run` flags grant orches permission to control systemd user units.
 
 Once you run the command, you should be able to verify that orches, and the webserver is running:
 
@@ -92,17 +96,16 @@ sudo podman run --rm -it --pid=host --pull=newer \
   https://github.com/orches-team/orches-config-rootful.git
 ```
 
-These commands perform the following steps:
-
-1) Creating directories that orches needs to run.
-2) Initializing orches by running its `init` subcommand. The extra flags given to `podman run` are needed so orches can control systemd user units. The last argument controls which repository is used for the initial deployment.  In this case, the official rootless sample with orches and a dummy [caddy](https://caddyserver.com/) webserver is used.
+These commands:
+1. Create directories required by orches.
+2. Initialize orches via its `init` subcommand, using the official rootful sample repository (containing orches and a caddy webserver). The specified `podman run` flags grant orches permission to control systemd units.
 
 Once you run the command, you should be able to verify that orches, and the webserver is running:
 
 ```bash
 systemctl status orches
 systemctl status caddy
-status podman exec systemd-orches orches status
+sudo podman exec systemd-orches orches status
 curl localhost:8080
 ```
 
@@ -249,3 +252,35 @@ Now sync your deployment, make your fork private, and sync it again to verify th
 
 
 ### Can I also manage configuration files for my containers using orches?
+
+Yes, orches makes it easy to manage configuration files alongside your container unit files. Here's how it works:
+
+1. Store your configuration files in your orches-managed git repository alongside your unit files
+2. Reference these files in your container units using relative paths
+3. Use the `X-Version` key in your unit files to trigger container restarts when configs change
+
+> The `X-Version` field is needed because orches only detects changes to the unit files themselves, not to external files referenced by them. When you update a configuration file, orches won't automatically know to restart the container since the unit file hasn't changed. By incrementing `X-Version`, you force the unit file to be different, which triggers orches to restart the container with the new configuration.
+
+**Rootless Example (`~/.config/orches/repo`):**
+```ini
+[Container]
+Image=docker.io/library/caddy:alpine
+Volume=%h/.config/orches/repo/Caddyfile:/etc/caddy/Caddyfile:z
+X-Version=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Rootful Example (`/var/lib/orches/repo`):**
+```ini
+[Container]
+Image=docker.io/library/caddy:alpine
+Volume=/var/lib/orches/repo/Caddyfile:/etc/caddy/Caddyfile:z
+X-Version=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+When you update a configuration file in your repository, increment the `X-Version` value in the corresponding container unit file. This ensures orches restarts the container with the new configuration during the next sync.
