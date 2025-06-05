@@ -35,4 +35,3 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u $ --password-stdin
           podman manifest push --all --format v2s2 orches ghcr.io/${{ github.repository }}:${{ github.sha }}
-          podman manifest push --all --format v2s2 orches ghcr.io/${{ github.repository }}:latest

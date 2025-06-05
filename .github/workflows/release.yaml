@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"  # matches semantic version tags without -dev suffix
+
+jobs:
+  tag-release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write
+      contents: write  # needed for creating releases
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to get tag message
+
+      - name: Parse version and get tag message
+        id: release_info
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          MAJOR_MINOR=$(echo $VERSION | cut -d. -f1,2)
+          TAG_MSG=$(git tag -l --format='%(contents)' $VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "major_minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAG_MSG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Copy images
+        env:
+          VERSION: ${{ steps.release_info.outputs.version }}
+          MAJOR_MINOR: ${{ steps.release_info.outputs.major_minor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Login to ghcr.io
+          echo "$GHCR_TOKEN" | skopeo login ghcr.io -u $ --password-stdin
+
+          # Source image is the one from the commit that was tagged
+          SRC_IMAGE="docker://ghcr.io/${{ github.repository }}:$GITHUB_SHA"
+
+          # Copy to version-specific tags
+          skopeo copy --all "$SRC_IMAGE" "docker://ghcr.io/${{ github.repository }}:$VERSION"
+          skopeo copy --all "$SRC_IMAGE" "docker://ghcr.io/${{ github.repository }}:$MAJOR_MINOR"
+          skopeo copy --all "$SRC_IMAGE" "docker://ghcr.io/${{ github.repository }}:latest"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.release_info.outputs.version }} \
+            --title "v${{ steps.release_info.outputs.version }}" \
+            --notes "${{ steps.release_info.outputs.message }}"

@@ -18,25 +18,23 @@ def get_version():
 
 def parse_version(version):
     """Parse version string into (major, minor, patch) tuple."""
-    base_version = version.removesuffix("-dev")
     try:
-        major, minor, patch = map(int, base_version.split("."))
+        major, minor, patch = map(int, version.split("."))
         return major, minor, patch
     except ValueError:
         raise ValueError(f"Invalid version format: {version}")
 
 
 def bump_version(major, minor, patch, is_minor):
-    """Bump version and return (release_version, next_dev_version)."""
+    """Bump version and return next dev version."""
     if is_minor:
         minor += 1
         patch = 0
     else:
         patch += 1
 
-    release_version = f"{major}.{minor}.{patch}"
-    next_dev_version = f"{release_version}-dev"
-    return release_version, next_dev_version
+    next_version = f"{major}.{minor}.{patch}-dev"
+    return next_version
 
 
 def update_version(new_version):
@@ -55,16 +53,14 @@ def update_version(new_version):
         f.write(new_content)
 
 
-def git_commit(version, is_dev):
-    """Create a git commit with the version change."""
+def git_commit(version):
+    """Create a git commit for the dev version."""
     subprocess.run(["git", "add", "cmd/orches/main.go"], check=True)
-
-    msg = f"chore: bump version to {version}" if is_dev else f"release: version {version}"
-    subprocess.run(["git", "commit", "-m", msg], check=True)
+    subprocess.run(["git", "commit", "-m", f"chore: bump version to {version}"], check=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bump version number in orches")
+    parser = argparse.ArgumentParser(description="Bump version number after release")
     parser.add_argument(
         "--minor",
         action="store_true",
@@ -76,22 +72,18 @@ def main():
     if not os.path.exists("cmd/orches/main.go"):
         raise ValueError("Must be run from project root")
 
-    # Get and parse current version
+    # Get current version
     current = get_version()
-    print(f"Current version: {current}")
+    if current.endswith("-dev"):
+        raise ValueError("Current version is already a development version")
+
+    # Parse and bump version
     major, minor, patch = parse_version(current)
-
-    # Calculate new versions
-    release_version, next_dev_version = bump_version(major, minor, patch, args.minor)
-
-    # Create release commit
-    update_version(release_version)
-    git_commit(release_version, is_dev=False)
-    print(f"Created release version: {release_version}")
+    next_dev_version = bump_version(major, minor, patch, args.minor)
 
     # Create development commit
     update_version(next_dev_version)
-    git_commit(next_dev_version, is_dev=True)
+    git_commit(next_dev_version)
     print(f"Bumped to development version: {next_dev_version}")
 
 

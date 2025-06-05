@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import subprocess
+
+
+def get_version():
+    """Get current version from main.go."""
+    with open("cmd/orches/main.go", "r") as f:
+        content = f.read()
+        match = re.search(r'const version = "([^"]+)"', content)
+        if not match:
+            raise ValueError("Version not found in main.go")
+        return match.group(1)
+
+
+def update_version(new_version):
+    """Update version in main.go."""
+    with open("cmd/orches/main.go", "r") as f:
+        content = f.read()
+
+    new_content = re.sub(
+        r'const version = "[^"]+"',
+        f'const version = "{new_version}"',
+        content,
+        count=1,
+    )
+
+    with open("cmd/orches/main.go", "w") as f:
+        f.write(new_content)
+
+
+def git_commit(version):
+    """Create a git commit and tag for the release version."""
+    subprocess.run(["git", "add", "cmd/orches/main.go"], check=True)
+    subprocess.run(["git", "commit", "-m", f"release: version {version}"], check=True)
+
+
+def main():
+    # Ensure we're in the project root
+    if not os.path.exists("cmd/orches/main.go"):
+        raise ValueError("Must be run from project root")
+
+    # Get current version and remove -dev suffix
+    current = get_version()
+    if not current.endswith("-dev"):
+        raise ValueError("Current version is not a development version")
+
+    release_version = current.removesuffix("-dev")
+
+    # Create release commit and tag
+    update_version(release_version)
+    git_commit(release_version)
+    print(f"Created release version: {release_version}")
+
+
+if __name__ == "__main__":
+    main()
