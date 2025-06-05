@@ -139,8 +139,10 @@ func sendMessageToDaemon(cmd daemonCommand) (string, error) {
 
 func main() {
 	var rootCmd = &cobra.Command{
-		Version: version,
 		Use:     "orches",
+		Short:   "A simple git-ops tool for Podman and systemd",
+		Long:    "orches is a git-ops tool for orchestrating Podman containers and systemd units on a single machine.",
+		Version: version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			level := slog.LevelInfo
 			verbose, _ := cmd.Flags().GetBool("verbose")
@@ -166,8 +168,11 @@ func main() {
 
 	var initCmd = &cobra.Command{
 		Use:   "init [remote]",
-		Short: "Initialize by cloning a repo and setting up state.",
-		Args:  cobra.ExactArgs(1),
+		Short: "Initialize by cloning a repo and setting up state",
+		Long:  "Initialize orches by cloning a Git repository and setting up the initial deployment state. The remote argument can be any valid Git repository URL or local path.",
+		Example: "  orches init https://github.com/user/repo.git\n" +
+			"  orches init /path/to/local/repo",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if socketExists() {
 				return errors.New("daemon is already running, cannot init")
@@ -179,6 +184,7 @@ func main() {
 	var syncCmd = &cobra.Command{
 		Use:   "sync",
 		Short: "Sync deployments",
+		Long:  "Synchronize the local system state with the target repository's state. This will fetch the latest changes and apply them.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dc := daemonCommand{Name: "sync"}
 			remoteRes, err := sendMessageToDaemon(dc)
@@ -198,6 +204,7 @@ func main() {
 	var pruneCmd = &cobra.Command{
 		Use:   "prune",
 		Short: "Prune deployments",
+		Long:  "Remove all deployed resources and clean up the local repository state. This will stop all managed services and containers.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dc := daemonCommand{Name: "prune"}
 			remoteRes, err := sendMessageToDaemon(dc)
@@ -215,7 +222,10 @@ func main() {
 	var switchCmd = &cobra.Command{
 		Use:   "switch [remote]",
 		Short: "Switch to a different deployment",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Switch the deployment source to a different Git repository. This will first prune the existing deployment and then initialize from the new source.",
+		Example: "  orches switch https://github.com/user/new-repo.git\n" +
+			"  orches switch /path/to/new/local/repo",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := args[0]
 
@@ -245,6 +255,7 @@ func main() {
 	var statusCmd = &cobra.Command{
 		Use:   "status",
 		Short: "Show the repository status",
+		Long:  "Display information about the current deployment, including the remote repository URL and the currently deployed Git reference.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dc := daemonCommand{Name: "status"}
 			remoteRes, err := sendMessageToDaemon(dc)
@@ -273,6 +284,9 @@ func main() {
 	var runCmd = &cobra.Command{
 		Use:   "run",
 		Short: "Periodically sync deployments",
+		Long:  "Start the orches daemon that periodically synchronizes the local system with the remote repository.",
+		Example: "  orches run\n" +
+			"  orches run --interval 300",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			syncInterval, err := cmd.Flags().GetInt("interval")
 			if err != nil {
@@ -370,11 +384,12 @@ func main() {
 		},
 	}
 
-	runCmd.Flags().Int("interval", 120, "Interval in seconds")
+	runCmd.Flags().Int("interval", 120, "Interval in seconds between synchronization attempts")
 
 	var versionCmd = &cobra.Command{
 		Use:   "version",
 		Short: "Print the version",
+		Long:  "Display version information about orches, including the version number, Git reference, and build timestamp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			info, ok := debug.ReadBuildInfo()
 			if !ok {
