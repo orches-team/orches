@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"  # matches semantic version tags without -dev suffix
+      - "v[0-9]+.[0-9]+.[0-9]+"  # matches semantic version tags
 
 jobs:
   tag-release:
@@ -21,9 +21,9 @@ jobs:
       - name: Parse version and get tag message
         id: release_info
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${GITHUB_REF#refs/tags/v}
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1,2)
-          TAG_MSG=$(git tag -l --format='%(contents)' $VERSION)
+          TAG_MSG=$(git tag -l --format='%(contents)' ${GITHUB_REF#refs/tags/})
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
           echo "message<<EOF" >> $GITHUB_OUTPUT
