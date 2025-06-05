@@ -16,19 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed to get tag message
+          fetch-depth: 0  # needed for gh to work
 
-      - name: Parse version and get tag message
+      - name: Parse version
         id: release_info
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1,2)
-          TAG_MSG=$(git tag -l --format='%(contents)' ${GITHUB_REF#refs/tags/})
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "$TAG_MSG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Copy images
         env:
@@ -51,6 +47,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ steps.release_info.outputs.version }} \
-            --title "v${{ steps.release_info.outputs.version }}" \
-            --notes "${{ steps.release_info.outputs.message }}"
+          gh release create "v${{ steps.release_info.outputs.version }}" \
+            --notes-from-tag
