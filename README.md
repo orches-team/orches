@@ -1,4 +1,4 @@
-![orches logo](https://raw.githubusercontent.com/orches-team/common/main/orches-logo-text.svg)
+![orches logo](https://raw.githubusercontent.com/orches-team/common/main/orches-logo-text.png)
 
 # orches: Simple git-ops for Podman and systemd
 
