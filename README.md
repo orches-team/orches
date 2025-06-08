@@ -38,6 +38,8 @@ orches is not limited to Podman containers, but it is also able to manage generi
 
 ## Quick Start
 
+> **Tip:** For a ready-to-use rootless example with many popular services (like Jellyfin, Pi-hole, Homarr, and more), check out [github.com/orches-team/example](https://github.com/orches-team/example). This repository provides a comprehensive orches configuration you can fork or use as inspiration for your own setup.
+
 orches can run both rootless and rootful. While running rootless offers stronger security, some applications cannot be run in such a setup. We provide sample configuration for both modes. If you are not sure which one to pick, start with rootless, it's simple to switch to rootful later if you need to.
 
 In order to run orches, you need:
