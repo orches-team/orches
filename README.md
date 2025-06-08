@@ -288,3 +288,11 @@ WantedBy=multi-user.target default.target
 ```
 
 When you update a configuration file in your repository, increment the `X-Version` value in the corresponding container unit file. This ensures orches restarts the container with the new configuration during the next sync.
+
+### Can I just use `:latest` instead of pinning my container images?
+
+You can use `:latest` or any other floating tag, but it's generally discouraged for production deployments because it can lead to unexpected updates and breakages. If you do want to use auto-updating images, Podman supports this via the `AutoUpdate=registry` option in your Quadlet file. 
+
+When you enable auto updates for your containers with the line `AutoUpdate=registry` in a Quadlet file you also need to enable and start the `podman-auto-update` service for that specific user (i.e. `systemctl --user enable podman-auto-update`), otherwise it won't update the image(s).
+
+For more information, see the [Podman auto-update documentation](https://docs.podman.io/en/latest/markdown/podman-auto-update.1.html).
