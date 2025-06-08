@@ -229,7 +229,10 @@ Orches supports the following unit types:
 |----------------|-------------------------------------------------------------------------------------------------------------------------|
 | `.container`   | Podman [container unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#container-units-container) |
 | `.network`     | Podman [network unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#network-units-network)       |
-| `.service`     | Ordinary [systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)                |
+| `.volume`      | Podman [volume unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#volume-units-volume)          |
+| `.pod`         | Podman [pod unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#pod-units-pod)                   |
+| `.service`     | [systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)                         |
+| `.socket`      | [systemd socket](https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html)                           |
 
 
 orches only process units in the top level directory of the repository. All directories in the repository are currently ignored.
@@ -291,7 +294,7 @@ When you update a configuration file in your repository, increment the `X-Versio
 
 ### Can I just use `:latest` instead of pinning my container images?
 
-You can use `:latest` or any other floating tag, but it's generally discouraged for production deployments because it can lead to unexpected updates and breakages. If you do want to use auto-updating images, Podman supports this via the `AutoUpdate=registry` option in your Quadlet file. 
+You can use `:latest` or any other floating tag, but it's generally discouraged for production deployments because it can lead to unexpected updates and breakages. If you do want to use auto-updating images, Podman supports this via the `AutoUpdate=registry` option in your Quadlet file.
 
 When you enable auto updates for your containers with the line `AutoUpdate=registry` in a Quadlet file you also need to enable and start the `podman-auto-update` service for that specific user (i.e. `systemctl --user enable podman-auto-update`), otherwise it won't update the image(s).
 
