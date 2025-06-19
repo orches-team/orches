@@ -16,6 +16,11 @@ import (
 
 var cid string
 
+const (
+	containerConfigDir = "/etc/containers/systemd"
+	systemdConfigDir   = "/etc/systemd/system"
+)
+
 func TestMain(m *testing.M) {
 	code := 1
 	defer func() { os.Exit(code) }()
@@ -72,7 +77,18 @@ func runUnchecked(args ...string) ([]byte, error) {
 
 func runOrches(t *testing.T, args ...string) []byte {
 	args = append([]string{"/app/orches", "-vv"}, args...)
-	return run(t, args...)
+	out, err := runUnchecked(args...)
+	if err != nil {
+		// If the command failed, get recent journalctl output with higher priority logs
+		journalOut, journalErr := runUnchecked("journalctl", "--no-pager", "-n", "100", "--priority=info..emerg")
+		if journalErr == nil {
+			t.Logf("\nRecent journalctl output:\n%s", string(journalOut))
+		} else {
+			t.Logf("failed to get journalctl output: %v", journalErr)
+		}
+		require.NoError(t, err)
+	}
+	return out
 }
 
 func addFile(t *testing.T, path, content string) {
@@ -110,7 +126,11 @@ const testdir2 = "/orchestest2"
 
 func cleanup(t *testing.T) {
 	// ADD ALL UNITS USED IN TESTS HERE
-	for _, unit := range []string{"caddy", "caddy2", "orches"} {
+	for _, unit := range []string{
+		"caddy", "caddy2", "orches",
+		"test", "test-network", "test-volume", "test-pod",
+		"test.socket", "test.mount", "test.timer",
+	} {
 		runUnchecked("systemctl", "stop", unit)
 	}
 
@@ -397,4 +417,116 @@ PublishPort=9090:80
 	// Verify orches process exited after prune
 	err = cmd.Wait()
 	assert.NoError(t, err, "orches process should exit cleanly after prune")
+}
+
+func TestOrchesSyncAllUnitTypes(t *testing.T) {
+	tests := []struct {
+		orchesUnit        string // The unit filename in orches
+		content           string // The unit content
+		associatedUnit    string // optional associated unit
+		associatedContent string // content for the associated unit
+		systemdName       string // The expected systemd unit name
+		configDir         string // Expected config directory
+	}{
+		{
+			orchesUnit: "test.container",
+			content: `[Container]
+Image=docker.io/library/alpine:latest
+Exec=sleep 1`,
+			systemdName: "test.service",
+			configDir:   containerConfigDir,
+		},
+		{
+			orchesUnit:  "test.network",
+			content:     `[Network]`,
+			systemdName: "test-network.service",
+			configDir:   containerConfigDir,
+		},
+		{
+			orchesUnit:  "test.volume",
+			content:     `[Volume]`,
+			systemdName: "test-volume.service",
+			configDir:   containerConfigDir,
+		},
+		{
+			orchesUnit:  "test.pod",
+			content:     `[Pod]`,
+			systemdName: "test-pod.service",
+			configDir:   containerConfigDir,
+		},
+		{
+			orchesUnit: "test.service",
+			content: `[Service]
+ExecStart=/bin/sleep 1`,
+			systemdName: "test.service",
+			configDir:   systemdConfigDir,
+		},
+		{
+			orchesUnit: "test.socket",
+			content: `[Socket]
+ListenStream=127.0.0.1:9999`,
+			associatedUnit: "test.service",
+			associatedContent: `[Service]
+ExecStart=/bin/sh -c "/bin/echo hello from socket"`,
+			systemdName: "test.socket",
+			configDir:   systemdConfigDir,
+		},
+		{
+			orchesUnit: "mnt-test.mount",
+			content: `[Mount]
+What=tmpfs
+Where=/mnt/test
+Type=tmpfs`,
+			systemdName: "mnt-test.mount",
+			configDir:   systemdConfigDir,
+		},
+		{
+			orchesUnit: "test.timer",
+			content: `[Timer]
+OnBootSec=1min
+
+[Install]
+WantedBy=timers.target`,
+			associatedUnit:    "test.service",
+			associatedContent: "[Service]\nExecStart=/bin/true\n",
+			systemdName:       "test.timer",
+			configDir:         systemdConfigDir,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.orchesUnit, func(t *testing.T) {
+			defer cleanup(t)
+
+			// Setup git repo
+			run(t, "mkdir", "-p", testdir)
+			run(t, "git", "-C", testdir, "init")
+
+			// Add the unit
+			addAndCommit(t, filepath.Join(testdir, tt.orchesUnit), tt.content)
+			if tt.associatedUnit != "" {
+				addAndCommit(t, filepath.Join(testdir, tt.associatedUnit), tt.associatedContent)
+			}
+			runOrches(t, "init", testdir)
+
+			// Verify unit is properly synced
+			run(t, "ls", filepath.Join(tt.configDir, tt.orchesUnit))
+			if tt.associatedUnit != "" {
+				run(t, "ls", filepath.Join(tt.configDir, tt.associatedUnit))
+			}
+			run(t, "systemctl", "status", tt.systemdName)
+
+			runOrches(t, "prune")
+
+			// Verify unit is gone
+			_, err := runUnchecked("ls", filepath.Join(tt.configDir, tt.orchesUnit))
+			assert.Error(t, err)
+			if tt.associatedUnit != "" {
+				_, err = runUnchecked("ls", filepath.Join(tt.configDir, tt.associatedUnit))
+				assert.Error(t, err)
+			}
+			_, err = runUnchecked("systemctl", "status", tt.systemdName)
+			assert.Error(t, err)
+		})
+	}
 }
