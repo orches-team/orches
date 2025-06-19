@@ -233,6 +233,8 @@ Orches supports the following unit types:
 | `.pod`         | Podman [pod unit](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#pod-units-pod)                   |
 | `.service`     | [systemd service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)                         |
 | `.socket`      | [systemd socket](https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html)                           |
+| `.mount`       | [systemd mount](https://www.freedesktop.org/software/systemd/man/latest/systemd.mount.html)                             |
+| `.timer`       | [systemd timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html)                             |
 
 
 orches only process units in the top level directory of the repository. All directories in the repository are currently ignored.

@@ -46,6 +46,8 @@ const (
 	UnitTypePod
 	UnitTypeService
 	UnitTypeSocket
+	UnitTypeMount
+	UnitTypeTimer
 )
 
 type unit struct {
@@ -105,6 +107,10 @@ func (u *unit) innerTyp(name string) *UnitType {
 		typ = UnitTypeService
 	case path.Ext(name) == ".socket":
 		typ = UnitTypeSocket
+	case path.Ext(name) == ".mount":
+		typ = UnitTypeMount
+	case path.Ext(name) == ".timer":
+		typ = UnitTypeTimer
 	default:
 		return nil
 	}
@@ -130,6 +136,10 @@ func (u *unit) SystemctlName() string {
 		return u.name
 	case UnitTypeSocket:
 		return u.name
+	case UnitTypeMount:
+		return u.name
+	case UnitTypeTimer:
+		return u.name
 	default:
 		panic("unknown unit type: " + u.name)
 	}
@@ -148,6 +158,10 @@ func (u *unit) Path(user bool) string {
 	case UnitTypeService:
 		fallthrough
 	case UnitTypeSocket:
+		fallthrough
+	case UnitTypeMount:
+		fallthrough
+	case UnitTypeTimer:
 		return path.Join(ServiceDir(user), u.name)
 	default:
 		panic("unknown unit type: " + u.name)
@@ -159,5 +173,10 @@ func (u *unit) EqualContent(other Unit) bool {
 }
 
 func (u *unit) CanBeEnabled() bool {
-	return u.Typ() == UnitTypeService || u.Typ() == UnitTypeSocket
+	switch u.Typ() {
+	case UnitTypeService, UnitTypeSocket, UnitTypeMount, UnitTypeTimer:
+		return true
+	default:
+		return false
+	}
 }
