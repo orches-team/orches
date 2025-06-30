@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,10 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	err = utils.ExecNoOutput("go", "build", "-o", tmpDir+"/orches", "../../cmd/orches")
+	// Build orches binary
+	arch := runtime.GOARCH // host arch == target arch we want inside the container
+	env := []string{"GOOS=linux", fmt.Sprintf("GOARCH=%s", arch), "CGO_ENABLED=0"}
+	err = utils.ExecNoOutputEnv(env, "go", "build", "-o", filepath.Join(tmpDir, "orches"), "../../cmd/orches")
 	if err != nil {
 		fmt.Printf("failed to build orches: %v", err)
 		panic(err)
@@ -144,7 +148,7 @@ func TestOrches(t *testing.T) {
 	// Init with caddy on 8080
 	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=8080:80
+Exec=/usr/bin/caddy file-server --listen :8080 --root /usr/share/caddy
 `)
 
 	runOrches(t, "init", testdir)
@@ -160,7 +164,7 @@ PublishPort=8080:80
 	// Move caddy to 9090
 	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=9090:80
+Exec=/usr/bin/caddy file-server --listen :9090 --root /usr/share/caddy
 `)
 
 	runOrches(t, "sync")
@@ -175,7 +179,7 @@ PublishPort=9090:80
 	removeAndCommit(t, filepath.Join(testdir, "caddy.container"))
 	addAndCommit(t, filepath.Join(testdir, "caddy2.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=8888:80
+Exec=/usr/bin/caddy file-server --listen :8888 --root /usr/share/caddy
 `)
 
 	runOrches(t, "sync")
@@ -220,7 +224,7 @@ func TestOrchesSelfUpdate(t *testing.T) {
 	// Let's mock orches with caddy
 	addAndCommit(t, filepath.Join(testdir, "orches.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=8080:80
+Exec=/usr/bin/caddy file-server --listen :8080 --root /usr/share/caddy
 `)
 
 	runOrches(t, "init", testdir)
@@ -236,7 +240,7 @@ PublishPort=8080:80
 	// Fake an update
 	addAndCommit(t, filepath.Join(testdir, "orches.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=9090:80
+Exec=/usr/bin/caddy file-server --listen :9090 --root /usr/share/caddy
 `)
 
 	// Wait for the sync for a bit
@@ -252,7 +256,7 @@ PublishPort=9090:80
 
 	// But the service file should have been updated
 	out = run(t, "cat", "/etc/containers/systemd/orches.container")
-	assert.Contains(t, string(out), "9090:80")
+	assert.Contains(t, string(out), ":9090")
 }
 
 func TestOrchesSwitchRepo(t *testing.T) {
@@ -265,7 +269,7 @@ func TestOrchesSwitchRepo(t *testing.T) {
 	// Add initial caddy container on 8080
 	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=8080:80
+Exec=/usr/bin/caddy file-server --listen :8080 --root /usr/share/caddy
 `)
 
 	runOrches(t, "init", testdir)
@@ -291,7 +295,7 @@ PublishPort=8080:80
 	// Add different caddy config in new repo
 	addAndCommit(t, filepath.Join(testdir2, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=9090:80
+Exec=/usr/bin/caddy file-server --listen :9090 --root /usr/share/caddy
 `)
 
 	// Switch to new repo
@@ -331,7 +335,7 @@ func TestOrchesRun(t *testing.T) {
 	// Add initial caddy container on 8080
 	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=8080:80
+Exec=/usr/bin/caddy file-server --listen :8080 --root /usr/share/caddy
 `)
 
 	runOrches(t, "init", testdir)
@@ -353,7 +357,7 @@ PublishPort=8080:80
 	// Update caddy to use port 9090
 	addAndCommit(t, filepath.Join(testdir, "caddy.container"), `[Container]
 Image=docker.io/library/caddy:alpine
-PublishPort=9090:80
+Exec=/usr/bin/caddy file-server --listen :9090 --root /usr/share/caddy
 `)
 
 	// Send sync command to daemon
