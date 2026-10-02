@@ -42,7 +42,12 @@ type UnitType int
 const (
 	UnitTypeContainer UnitType = iota
 	UnitTypeNetwork
+	UnitTypeVolume
+	UnitTypePod
 	UnitTypeService
+	UnitTypeSocket
+	UnitTypeMount
+	UnitTypeTimer
 )
 
 type unit struct {
@@ -94,8 +99,18 @@ func (u *unit) innerTyp(name string) *UnitType {
 		typ = UnitTypeContainer
 	case path.Ext(name) == ".network":
 		typ = UnitTypeNetwork
+	case path.Ext(name) == ".volume":
+		typ = UnitTypeVolume
+	case path.Ext(name) == ".pod":
+		typ = UnitTypePod
 	case path.Ext(name) == ".service":
 		typ = UnitTypeService
+	case path.Ext(name) == ".socket":
+		typ = UnitTypeSocket
+	case path.Ext(name) == ".mount":
+		typ = UnitTypeMount
+	case path.Ext(name) == ".timer":
+		typ = UnitTypeTimer
 	default:
 		return nil
 	}
@@ -113,7 +128,17 @@ func (u *unit) SystemctlName() string {
 		return u.name[:len(u.name)-len(".container")] + ".service"
 	case UnitTypeNetwork:
 		return u.name[:len(u.name)-len(".network")] + "-network.service"
+	case UnitTypeVolume:
+		return u.name[:len(u.name)-len(".volume")] + "-volume.service"
+	case UnitTypePod:
+		return u.name[:len(u.name)-len(".pod")] + "-pod.service"
 	case UnitTypeService:
+		return u.name
+	case UnitTypeSocket:
+		return u.name
+	case UnitTypeMount:
+		return u.name
+	case UnitTypeTimer:
 		return u.name
 	default:
 		panic("unknown unit type: " + u.name)
@@ -125,8 +150,18 @@ func (u *unit) Path(user bool) string {
 	case UnitTypeContainer:
 		fallthrough
 	case UnitTypeNetwork:
+		fallthrough
+	case UnitTypeVolume:
+		fallthrough
+	case UnitTypePod:
 		return path.Join(ContainerDir(user), u.name)
 	case UnitTypeService:
+		fallthrough
+	case UnitTypeSocket:
+		fallthrough
+	case UnitTypeMount:
+		fallthrough
+	case UnitTypeTimer:
 		return path.Join(ServiceDir(user), u.name)
 	default:
 		panic("unknown unit type: " + u.name)
@@ -138,5 +173,10 @@ func (u *unit) EqualContent(other Unit) bool {
 }
 
 func (u *unit) CanBeEnabled() bool {
-	return u.Typ() == UnitTypeService
+	switch u.Typ() {
+	case UnitTypeService, UnitTypeSocket, UnitTypeMount, UnitTypeTimer:
+		return true
+	default:
+		return false
+	}
 }
